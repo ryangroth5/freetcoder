@@ -62,6 +62,31 @@ def _run_cases(
     return result.verdict, decode_results(result.stdout), result.stderr
 
 
+def _failure_detail(
+    verdict: Verdict, results: list[CaseResult], stderr: str
+) -> str:
+    """Say *why* something failed, in a form the model can act on.
+
+    The harness reports its own faults -- "function is not defined or not
+    exported" -- as a record on **stdout**, so reporting only stderr produced an
+    empty complaint. That made the retry loop blind: it repeated the same
+    mistake every attempt because it was never told what the mistake was.
+
+    Never returns an empty string.
+    """
+    for res in results:
+        if not res.ok and res.error:
+            return res.error.strip()[:400]
+    if stderr.strip():
+        return stderr.strip()[:400]
+    if results:
+        return f"{verdict.value}, and the harness produced no diagnostic"
+    return (
+        f"{verdict.value}, and the harness produced no output at all -- the "
+        f"solution most likely failed to load"
+    )
+
+
 def _check_reference_on_visible(
     q: GeneratedQuestion, sig: Signature
 ) -> GateReport | None:
@@ -77,7 +102,10 @@ def _check_reference_on_visible(
     if verdict is not Verdict.OK:
         return GateReport(
             outcome=GateOutcome.REFERENCE_FAILED,
-            detail=f"reference solution did not run ({verdict.value}): {stderr[:400]}",
+            detail=(
+                "reference solution did not run: "
+                f"{_failure_detail(verdict, results, stderr)}"
+            ),
         )
     if len(results) != len(q.visible_tests):
         return GateReport(
@@ -107,7 +135,10 @@ def _materialise_hidden_cases(q: GeneratedQuestion) -> tuple[list[TestCase], Gat
     if result.verdict is not Verdict.OK:
         return [], GateReport(
             outcome=GateOutcome.GENERATOR_FAILED,
-            detail=f"hidden generator failed ({result.verdict.value}): {result.stderr[:400]}",
+            detail=(
+                "the hidden-case generator did not run: "
+                f"{_failure_detail(result.verdict, [], result.stderr)}"
+            ),
         )
 
     cases: list[TestCase] = []
@@ -144,8 +175,8 @@ def _compute_oracle(
         return [], 0, GateReport(
             outcome=GateOutcome.REFERENCE_FAILED,
             detail=(
-                f"reference failed on hidden cases ({verdict.value}); "
-                f"{len(results)}/{len(cases)} completed: {stderr[:300]}"
+                f"reference failed on hidden cases; {len(results)}/{len(cases)} "
+                f"completed: {_failure_detail(verdict, results, stderr)}"
             ),
         )
 
@@ -236,8 +267,8 @@ def _check_other_languages(
             return GateReport(
                 outcome=GateOutcome.REFERENCE_FAILED,
                 detail=(
-                    f"{lang.value} reference did not run ({verdict.value}): "
-                    f"{stderr[:300]}"
+                    f"the {lang.value} reference did not run: "
+                    f"{_failure_detail(verdict, results, stderr)}"
                 ),
             )
         for case, res in zip(sample, results, strict=True):

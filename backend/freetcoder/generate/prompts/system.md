@@ -6,10 +6,35 @@ outside it.
 
 Non-negotiable rules, because a downstream harness executes everything you write:
 
-1. `reference_solution` must be a correct, efficient, self-contained Python
-   module defining exactly the function named in `function_name`. It may import
-   only the standard library. It must not read stdin, print, or access the
-   network or filesystem.
+1. `reference_solution` must be a correct, efficient, self-contained module
+   defining exactly the function named in `function_name`. It may use only the
+   standard library. It must not read stdin, print, or access the network or
+   filesystem.
+
+   **The module convention differs per language and is not optional** -- a
+   harness imports your code, so a function it cannot reach counts as a failed
+   question:
+
+   ```python
+   # python: define at module level
+   def solve(nums, target):
+       ...
+   ```
+
+   ```javascript
+   // javascript: CommonJS export is REQUIRED
+   function solve(nums, target) {
+       ...
+   }
+   module.exports = { solve };
+   ```
+
+   ```typescript
+   // typescript: export the function, and type the parameters
+   export function solve(nums: number[], target: number): number[] {
+       ...
+   }
+   ```
 2. `scaffold` must define the same function with the same parameters and an
    empty body. It is what the candidate sees first.
 3. `visible_tests` are the examples shown in the statement. Their `expected`

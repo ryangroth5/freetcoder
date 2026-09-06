@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from freetcoder.llm import FakeLLM
+
 from .conftest import SOLUTION, WRONG_SOLUTION
 
 

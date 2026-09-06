@@ -135,9 +135,29 @@ const _solution = require('./solution.js');
 // Rule 3: output produced while the module loads belongs to the first case.
 let _pending = _drain();
 
-const _FN = (typeof _solution === 'function')
+// Accept the documented CommonJS export, a default export, or a bare module
+// function.
+let _FN = (typeof _solution === 'function')
   ? _solution
   : (_solution && (_solution[{function_name_json}] || _solution.default));
+
+if (typeof _FN !== 'function') {{
+  // Script-style answer with no exports at all. A top-level `function f(){{}}`
+  // in CommonJS is module-scoped, so it is not on globalThis and require()
+  // cannot see it -- but re-evaluating the source in a vm context does make
+  // top-level declarations reachable. A working function beats failing
+  // opaquely on a convention the model got slightly wrong.
+  try {{
+    const fs = require('fs');
+    const vm = require('vm');
+    const ctx = vm.createContext({{ console, require, module: {{}}, exports: {{}} }});
+    vm.runInContext(
+      fs.readFileSync(require('path').join(__dirname, 'solution.js'), 'utf8'), ctx);
+    if (typeof ctx[{function_name_json}] === 'function') _FN = ctx[{function_name_json}];
+  }} catch (e) {{
+    // Leave _FN unset; the error below reports it properly.
+  }}
+}}
 
 if (typeof _FN !== 'function') {{
   _emit({{ harness_error: 'function ' + {function_name_json} + ' is not defined or not exported',

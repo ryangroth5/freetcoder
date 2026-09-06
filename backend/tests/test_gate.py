@@ -21,7 +21,13 @@ from freetcoder.generate.harness import (
     values_equal,
 )
 from freetcoder.llm.fake import FIXTURE_DIR
-from freetcoder.models import GateOutcome, GeneratedQuestion, TestCase
+from freetcoder.models import (
+    GateOutcome,
+    GeneratedQuestion,
+    Language,
+    TestCase,
+)
+from freetcoder.runner import Verdict
 
 
 def load(name: str) -> GeneratedQuestion:
@@ -125,3 +131,67 @@ class TestHarnessPlumbing:
     )
     def test_value_comparison(self, a: object, b: object, same: bool) -> None:
         assert values_equal(a, b) is same
+
+
+class TestFailuresExplainThemselves:
+    """A rejection with an empty reason made the retry loop blind.
+
+    Production showed four identical attempts, each rejected with
+    "javascript reference did not run (runtime_error):" and nothing after the
+    colon -- because the harness reports its own faults on stdout while the gate
+    reported only stderr. More retries cannot help without a signal.
+    """
+
+    ALL_LANGUAGES = [Language.PYTHON, Language.JAVASCRIPT, Language.TYPESCRIPT]
+
+    @pytest.mark.parametrize(
+        "fixture",
+        [
+            "two_sum_wrong_oracle",
+            "two_sum_unsolvable",
+            "two_sum_bad_generator",
+            "two_sum_brute_disagrees",
+            "two_sum_perf_not_enforced",
+            "two_sum_js_missing_function",
+        ],
+    )
+    def test_every_rejection_says_why(self, fixture: str) -> None:
+        report = validate_question(load(fixture), languages=self.ALL_LANGUAGES)
+        assert not report.accepted, f"{fixture} was expected to fail"
+        assert report.detail.strip(), "a rejection with no reason teaches nothing"
+        # The old bug: a detail that trails off after the colon.
+        assert not report.detail.rstrip().endswith(":")
+
+    def test_a_missing_function_is_named_as_such(self) -> None:
+        """The exact detail the model needed and never received."""
+        report = validate_question(
+            load("two_sum_js_missing_function"), languages=self.ALL_LANGUAGES
+        )
+        assert report.outcome is GateOutcome.REFERENCE_FAILED
+        assert "not defined or not exported" in report.detail
+        assert "javascript" in report.detail
+
+    def test_an_unexported_js_reference_now_runs(self) -> None:
+        """Script-style JavaScript is reachable via the vm fallback.
+
+        This is the shape that blocked a real session: a correct solution
+        rejected purely for omitting `module.exports`.
+        """
+        report = validate_question(
+            load("two_sum_js_unexported"), languages=self.ALL_LANGUAGES
+        )
+        assert report.accepted, report.detail
+
+    def test_failure_detail_never_returns_empty(self) -> None:
+        from freetcoder.generate.gate import _failure_detail
+        from freetcoder.generate.harness import CaseResult
+
+        assert _failure_detail(Verdict.RUNTIME_ERROR, [], "").strip()
+        assert _failure_detail(Verdict.TIMEOUT, [], "   ").strip()
+        assert "boom" in _failure_detail(
+            Verdict.RUNTIME_ERROR, [CaseResult(ok=False, error="boom")], ""
+        )
+        # A harness diagnostic beats stderr, because it is the specific one.
+        assert "boom" in _failure_detail(
+            Verdict.RUNTIME_ERROR, [CaseResult(ok=False, error="boom")], "generic noise"
+        )
