@@ -20,6 +20,7 @@ from ..models import (
     GateReport,
     GeneratedQuestion,
     Language,
+    ParamConstraint,
     Signature,
     TestCase,
 )
@@ -317,6 +318,61 @@ def _exceeds_safe_integer(value: object) -> bool:
     return False
 
 
+def _violation(value: object, c: ParamConstraint) -> str | None:
+    """How `value` breaks constraint `c`, or None if it does not."""
+    if isinstance(value, (list, str)):
+        if c.min_length is not None and len(value) < c.min_length:
+            return f"length {len(value)} is below the stated minimum {c.min_length}"
+        if c.max_length is not None and len(value) > c.max_length:
+            return f"length {len(value)} exceeds the stated maximum {c.max_length}"
+        if isinstance(value, list):
+            for element in value:
+                if isinstance(element, bool) or not isinstance(element, (int, float)):
+                    continue
+                if c.element_min is not None and element < c.element_min:
+                    return f"element {element} is below the stated minimum {c.element_min}"
+                if c.element_max is not None and element > c.element_max:
+                    return f"element {element} exceeds the stated maximum {c.element_max}"
+        return None
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if c.min is not None and value < c.min:
+        return f"{value} is below the stated minimum {c.min}"
+    if c.max is not None and value > c.max:
+        return f"{value} exceeds the stated maximum {c.max}"
+    return None
+
+
+def _check_constraints(
+    q: GeneratedQuestion, cases: list[TestCase], label: str
+) -> GateReport | None:
+    """Every case must satisfy the bounds the question itself advertises.
+
+    A candidate who reads "n <= 10^4" and optimises accordingly should never be
+    handed n = 10^6. Prose alone cannot be checked, so this reads the structured
+    constraints beside it.
+    """
+    if not q.constraints:
+        return None
+    by_name = {c.name: c for c in q.constraints}
+    for i, case in enumerate(cases):
+        for name, value in case.args.items():
+            constraint = by_name.get(name)
+            if constraint is None:
+                continue
+            if (why := _violation(value, constraint)) is not None:
+                return GateReport(
+                    outcome=GateOutcome.CONSTRAINT_VIOLATION,
+                    detail=(
+                        f"{label} case {i + 1}: parameter {name!r} {why}. The "
+                        f"statement's constraints and the generated cases must "
+                        f"agree -- fix whichever is wrong."
+                    ),
+                )
+    return None
+
+
 def _check_magnitudes(
     cases: list[TestCase], languages: Sequence[Language]
 ) -> GateReport | None:
@@ -355,6 +411,9 @@ def validate_question(
             detail=f"no signature for {language.value}",
         )
 
+    if (report := _check_constraints(q, list(q.visible_tests), "visible")) is not None:
+        return report
+
     if (report := _check_reference_on_visible(q, sig)) is not None:
         return report
 
@@ -364,6 +423,9 @@ def validate_question(
 
     hidden, reference_ms, report = _compute_oracle(sig, cases)
     if report is not None:
+        return report
+
+    if (report := _check_constraints(q, hidden, "hidden")) is not None:
         return report
 
     offered = list(languages or [language])

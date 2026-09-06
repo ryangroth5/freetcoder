@@ -18,10 +18,12 @@ from ..models import (
     Difficulty,
     GatedQuestion,
     GateOutcome,
+    GateReport,
     GeneratedQuestion,
     Language,
 )
 from .gate import validate_question
+from .repair import repair_question
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +93,9 @@ class GenerationAttempt:
     outcome: GateOutcome
     detail: str = ""
     title: str = ""
+    #: True when this round patched an existing question rather than asking for
+    #: a new one, so the acceptance report can tell the two apart.
+    repaired: bool = False
 
 
 @dataclass(slots=True)
@@ -103,6 +108,19 @@ class GenerationResult:
         return self.question is not None
 
 
+def _gated(
+    question: GeneratedQuestion, report: GateReport, language: Language
+) -> GatedQuestion:
+    """Package an accepted question with everything the gate computed."""
+    return GatedQuestion(
+        question=question,
+        hidden_tests=report.hidden_cases,
+        reference_ms=report.reference_ms,
+        reference_ms_by_language=report.reference_ms_by_language,
+        language=language,
+    )
+
+
 async def generate_question(
     client: LLMClient,
     config: FormatConfig,
@@ -110,9 +128,15 @@ async def generate_question(
     difficulty: Difficulty | None = None,
     language: Language = Language.PYTHON,
     max_attempts: int = 4,
+    repair_rounds: int = 3,
     exclude_titles: list[str] | None = None,
 ) -> GenerationResult:
-    """Produce one gate-approved question, or report why we could not."""
+    """Produce one gate-approved question, or report why we could not.
+
+    Each attempt generates, then *repairs* -- patching the artifact the gate
+    objected to rather than discarding a question that may be mostly right.
+    Only when repair is exhausted does it ask for a fresh question.
+    """
     difficulty = difficulty or config.session.difficulty_for(0)
     system = _read_prompt("system")
     user = build_user_prompt(config, difficulty, exclude_titles=exclude_titles)
@@ -139,18 +163,29 @@ async def generate_question(
         )
 
         if report.accepted:
-            result.question = GatedQuestion(
-                question=candidate,
-                hidden_tests=report.hidden_cases,
-                reference_ms=report.reference_ms,
-                reference_ms_by_language=report.reference_ms_by_language,
-                language=language,
-            )
+            result.question = _gated(candidate, report, language)
             return result
 
         log.info(
             "attempt %d rejected (%s): %s", attempt + 1, report.outcome.value, report.detail
         )
+
+        # Try to fix what is broken before throwing the whole thing away.
+        if repair_rounds > 0:
+            repaired, final_report, history = await repair_question(
+                client, candidate, report,
+                language=language,
+                languages=list(config.environment.languages),
+                rounds=repair_rounds,
+            )
+            for outcome in history:
+                result.attempts.append(
+                    GenerationAttempt(outcome, title=candidate.title, repaired=True)
+                )
+            if repaired is not None:
+                result.question = _gated(repaired, final_report, language)
+                return result
+            report = final_report
         user = (
             f"{user}\n\n### Your previous attempt was rejected\n\n"
             f"Reason: **{report.outcome.value}**\n{report.detail}\n\n"

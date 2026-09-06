@@ -57,6 +57,13 @@ Non-negotiable rules, because a downstream harness executes everything you write
    tree, graph, grid or state machine when it genuinely aids comprehension.
    Never describe an image you cannot draw.
 
+8. `constraints` repeats `constraints_md` as data, one entry per parameter, so
+   the harness can check it. The two must agree: they are the same promise to
+   the candidate, once in prose and once machine-readable. Every case your
+   generator emits is checked against these bounds, and a question whose
+   generator contradicts its own stated limits is rejected -- a candidate who
+   reads "n <= 10^4" must never be handed n = 10^6.
+
 Write the statement so a competent engineer could implement it without seeing
 your reference solution. Every input bound the candidate needs must appear in
 `constraints_md`.

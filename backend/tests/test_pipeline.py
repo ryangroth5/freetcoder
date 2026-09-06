@@ -56,13 +56,40 @@ class TestGenerationLoop:
         assert len(result.question.hidden_tests) >= 10
 
     async def test_retries_after_a_gate_rejection_and_recovers(self) -> None:
+        """With repair disabled, a rejection is followed by a fresh question."""
         client = FakeLLM([fixture("two_sum_wrong_oracle"), fixture("two_sum_good")])
-        result = await generate_question(client, resolve("leetcode"), max_attempts=3)
+        result = await generate_question(
+            client, resolve("leetcode"), max_attempts=3, repair_rounds=0
+        )
         assert result.accepted
         assert [a.outcome for a in result.attempts] == [
             GateOutcome.VISIBLE_MISMATCH,
             GateOutcome.ACCEPTED,
         ]
+
+    async def test_repair_is_attempted_before_regenerating(self) -> None:
+        """Regenerating discards a statement that may be perfectly good, so a
+        patch to the broken artifact is tried first."""
+        from freetcoder.generate.repair import QuestionPatch
+        from freetcoder.models import Language
+
+        good_python = (
+            "def two_sum(nums, target):\n"
+            "    seen = {}\n"
+            "    for i, n in enumerate(nums):\n"
+            "        if target - n in seen:\n"
+            "            return [seen[target - n], i]\n"
+            "        seen[n] = i\n"
+            "    return []\n"
+        )
+        client = FakeLLM([
+            fixture("two_sum_wrong_oracle"),
+            QuestionPatch(target="reference", language=Language.PYTHON,
+                          content=good_python),
+        ])
+        result = await generate_question(client, resolve("leetcode"), max_attempts=1)
+        assert result.accepted
+        assert any(a.repaired for a in result.attempts)
 
     async def test_rejection_detail_is_fed_back_to_the_model(self) -> None:
         """A bare retry reproduces the same mistake; a specific complaint fixes it."""
@@ -86,11 +113,20 @@ class TestGenerationLoop:
 
     async def test_reports_every_attempt_for_the_acceptance_rate(self) -> None:
         client = FakeLLM([fixture("two_sum_bad_generator"), fixture("two_sum_good")])
-        result = await generate_question(client, resolve("leetcode"), max_attempts=2)
+        result = await generate_question(
+            client, resolve("leetcode"), max_attempts=2, repair_rounds=0
+        )
         assert [a.outcome for a in result.attempts] == [
             GateOutcome.NO_HIDDEN_CASES,
             GateOutcome.ACCEPTED,
         ]
+
+    async def test_repairs_are_reported_separately_from_regenerations(self) -> None:
+        """The acceptance report must distinguish the two, or the numbers lie."""
+        client = FakeLLM([fixture("two_sum_good")])
+        result = await generate_question(client, resolve("leetcode"))
+        assert result.accepted
+        assert not any(a.repaired for a in result.attempts)
 
     @pytest.mark.parametrize("style", ["leetcode", "codesignal_gca", "codility", "coderbyte"])
     async def test_every_style_can_drive_the_loop(self, style: str) -> None:

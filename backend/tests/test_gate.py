@@ -25,6 +25,7 @@ from freetcoder.models import (
     GateOutcome,
     GeneratedQuestion,
     Language,
+    ParamConstraint,
     TestCase,
 )
 from freetcoder.runner import Verdict
@@ -244,3 +245,67 @@ class TestCorrectnessGuards:
         report = validate_question(load("two_sum_multilang"), languages=self.ALL)
         assert report.accepted, report.detail
         assert set(report.reference_ms_by_language) >= {"python", "javascript"}
+
+
+class TestConstraintsAreChecked:
+    """The statement's bounds are a promise; the gate now holds it.
+
+    A candidate who reads "n <= 10^4" and picks an algorithm accordingly must
+    never be graded on n = 10^6. Prose cannot be checked, so questions carry the
+    same bounds as data.
+    """
+
+    def _with_bounds(self) -> GeneratedQuestion:
+        q = load("two_sum_good")
+        q.constraints = [
+            ParamConstraint(name="nums", min_length=2, max_length=50,
+                            element_min=-500, element_max=500),
+            ParamConstraint(name="target", min=-1000, max=1000),
+        ]
+        return q
+
+    def test_a_question_within_its_own_bounds_is_accepted(self) -> None:
+        assert validate_question(self._with_bounds()).accepted
+
+    def test_a_generator_exceeding_the_stated_length_is_rejected(self) -> None:
+        q = self._with_bounds()
+        q.hidden_generator_py = (
+            "import json, random\nrandom.seed(1)\n"
+            "for _ in range(12):\n"
+            "    nums = [random.randint(-500, 500) for _ in range(200)]\n"
+            "    print(json.dumps({'args': {'nums': nums, "
+            "'target': nums[0] + nums[1]}}))\n"
+        )
+        report = validate_question(q)
+        assert report.outcome is GateOutcome.CONSTRAINT_VIOLATION
+        assert "exceeds the stated maximum 50" in report.detail
+
+    def test_a_generator_exceeding_element_bounds_is_rejected(self) -> None:
+        q = self._with_bounds()
+        q.hidden_generator_py = (
+            "import json\n"
+            "for _ in range(12):\n"
+            "    print(json.dumps({'args': {'nums': [99999, 1], 'target': 100000}}))\n"
+        )
+        report = validate_question(q)
+        assert report.outcome is GateOutcome.CONSTRAINT_VIOLATION
+        assert "element 99999" in report.detail
+
+    def test_a_visible_example_outside_the_bounds_is_rejected(self) -> None:
+        """Drift between the prose and the examples is caught too."""
+        q = self._with_bounds()
+        q.visible_tests[0].args["target"] = 99_999
+        report = validate_question(q)
+        assert report.outcome is GateOutcome.CONSTRAINT_VIOLATION
+        assert "visible case 1" in report.detail
+
+    def test_the_rejection_says_which_side_to_fix(self) -> None:
+        q = self._with_bounds()
+        q.visible_tests[0].args["target"] = 99_999
+        assert "fix whichever is wrong" in validate_question(q).detail
+
+    def test_questions_without_structured_constraints_still_pass(self) -> None:
+        """Constraints are additive: older questions are not invalidated."""
+        q = load("two_sum_good")
+        q.constraints = []
+        assert validate_question(q).accepted

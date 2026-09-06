@@ -45,6 +45,24 @@ class TestCase(BaseModel):
     explanation: str | None = Field(default=None, max_length=600)
 
 
+class ParamConstraint(BaseModel):
+    """Machine-checkable bounds for one parameter.
+
+    The prose in `constraints_md` is for the candidate; this is for the gate.
+    Without it nothing stops a generator emitting n = 10^6 while the statement
+    promises n <= 10^4 -- grading someone on input the question told them could
+    not occur.
+    """
+
+    name: str = Field(description="Parameter name, matching the signature")
+    min: float | None = Field(default=None, description="Minimum, for a number")
+    max: float | None = Field(default=None, description="Maximum, for a number")
+    min_length: int | None = Field(default=None, description="For a list or string")
+    max_length: int | None = Field(default=None, description="For a list or string")
+    element_min: float | None = Field(default=None, description="Minimum element")
+    element_max: float | None = Field(default=None, description="Maximum element")
+
+
 class Signature(BaseModel):
     """The function the candidate must implement, for one language."""
 
@@ -66,6 +84,12 @@ class GeneratedQuestion(BaseModel):
         description="Markdown. May contain ```mermaid fences and inline images.",
     )
     constraints_md: str = Field(description="Markdown bullet list of input bounds")
+    #: The same bounds as data, so the gate can check them. Must agree with the
+    #: prose: they are two renderings of one promise to the candidate.
+    constraints: list[ParamConstraint] = Field(
+        default_factory=list,
+        description="Machine-checkable version of constraints_md, one per parameter",
+    )
     hint_md: str | None = Field(
         default=None, description="Omitted for formats that give no candidate support"
     )
