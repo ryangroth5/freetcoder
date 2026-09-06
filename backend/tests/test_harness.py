@@ -22,6 +22,7 @@ from freetcoder.generate.harness import (
     build_python_harness,
     decode_results,
     encode_cases,
+    values_equal,
 )
 from freetcoder.models import TestCase
 from freetcoder.runner import Limits, Verdict, run_python
@@ -145,3 +146,36 @@ class TestExistingBehaviourPreserved:
         results = run_cases("def f(x):\n    return object()\n", [CASES[0]])
         assert results and not results[0].ok
         assert "JSON-serialisable" in results[0].error
+
+
+class TestFloatToleranceReachesNestedValues:
+    """The tolerance used to apply only at the top level.
+
+    `0.1 + 0.2` equalled `0.3`, but `[0.1 + 0.2]` did not equal `[0.3]`, so any
+    question returning a list of floats could fail a correct solution.
+    """
+
+    def test_top_level_floats(self) -> None:
+        assert values_equal(0.1 + 0.2, 0.3)
+
+    def test_floats_in_a_list(self) -> None:
+        assert values_equal([0.1 + 0.2], [0.3])
+
+    def test_floats_nested_two_deep(self) -> None:
+        assert values_equal([[0.1 + 0.2, 1.0]], [[0.3, 1.0]])
+
+    def test_floats_in_a_dict(self) -> None:
+        assert values_equal({"x": 0.1 + 0.2}, {"x": 0.3})
+
+    def test_genuinely_different_numbers_still_differ(self) -> None:
+        assert not values_equal([0.3001], [0.3])
+        assert not values_equal({"x": 1.0}, {"x": 2.0})
+
+    def test_structure_still_matters(self) -> None:
+        assert not values_equal([1, 2], [2, 1])
+        assert not values_equal([1, 2], [1, 2, 3])
+        assert not values_equal({"a": 1}, {"b": 1})
+
+    def test_booleans_are_not_numbers_at_any_depth(self) -> None:
+        assert not values_equal([True], [1])
+        assert not values_equal({"x": False}, {"x": 0})

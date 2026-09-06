@@ -296,18 +296,44 @@ def decode_results(stdout: str) -> list[CaseResult]:
     return results
 
 
+#: Absolute tolerance for float comparison. Floating point arithmetic that is
+#: correct can still differ in the last bits, and a candidate should not lose
+#: for it.
+FLOAT_TOLERANCE = 1e-9
+
+
 def values_equal(a: object, b: object) -> bool:
     """Compare an expected value with a produced one.
 
-    JSON round-tripping turns tuples into lists and int keys into strings, so a
-    naive == would reject correct answers. Normalise both sides through JSON
-    before comparing, and treat 1 == 1.0 as equal.
+    JSON round-tripping turns tuples into lists and integer keys into strings,
+    so a naive == would reject correct answers. Normalise both sides through
+    JSON, then compare *recursively* so the float tolerance reaches numbers
+    nested in lists and dicts.
+
+    An earlier version applied the tolerance only at the top level and fell
+    through to exact equality on everything else, so `0.1 + 0.2` equalled `0.3`
+    but `[0.1 + 0.2]` did not equal `[0.3]` -- any question returning a list of
+    floats could fail a correct solution.
     """
+    try:
+        left = json.loads(json.dumps(a))
+        right = json.loads(json.dumps(b))
+    except (TypeError, ValueError):
+        return a == b
+    return _deep_equal(left, right)
+
+
+def _deep_equal(a: object, b: object) -> bool:
+    # bool is a subclass of int, so it must be settled before the numeric case
+    # or True would equal 1.
     if isinstance(a, bool) or isinstance(b, bool):
         return a is b
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return abs(a - b) < 1e-9
-    try:
-        return bool(json.loads(json.dumps(a)) == json.loads(json.dumps(b)))
-    except (TypeError, ValueError):
-        return a == b
+        return abs(a - b) < FLOAT_TOLERANCE
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(
+            _deep_equal(x, y) for x, y in zip(a, b, strict=True)
+        )
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_deep_equal(a[k], b[k]) for k in a)
+    return bool(a == b)

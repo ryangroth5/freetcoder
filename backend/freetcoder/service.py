@@ -92,7 +92,12 @@ def execute_against(
         return ExecutionReport(result.verdict, [], result.stderr)
 
     results = decode_results(result.stdout)
-    budget = _budget_ms(gated.reference_ms, len(gated.hidden_tests))
+    # Budget against *this language's* reference. Judging a JavaScript
+    # submission by a Python-derived number measures the runtime, not the code.
+    reference_for_language = gated.reference_ms_by_language.get(
+        language.value, gated.reference_ms
+    )
+    budget = _budget_ms(reference_for_language, len(gated.hidden_tests))
 
     outcomes: list[CaseOutcome] = []
     first_failure: dict[str, Any] | None = None

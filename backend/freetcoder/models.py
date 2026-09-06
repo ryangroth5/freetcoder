@@ -106,6 +106,9 @@ class GateOutcome(enum.StrEnum):
     GENERATOR_FAILED = "generator_failed"
     VISIBLE_MISMATCH = "visible_mismatch"
     NO_HIDDEN_CASES = "no_hidden_cases"
+    CONSTRAINT_VIOLATION = "constraint_violation"
+    UNSAFE_MAGNITUDE = "unsafe_magnitude"
+    MISSING_BRUTE_FORCE = "missing_brute_force"
     BRUTE_FORCE_DISAGREES = "brute_force_disagrees"
     PERF_NOT_DISCRIMINATING = "perf_not_discriminating"
 
@@ -117,6 +120,9 @@ class GateReport(BaseModel):
     detail: str = ""
     hidden_cases: list[TestCase] = Field(default_factory=list)
     reference_ms: int = 0
+    #: Reference timing per language. A JS submission judged against a
+    #: Python-derived budget is being measured against the wrong yardstick.
+    reference_ms_by_language: dict[str, int] = Field(default_factory=dict)
 
     @property
     def accepted(self) -> bool:
@@ -133,6 +139,7 @@ class GatedQuestion(BaseModel):
     question: GeneratedQuestion
     hidden_tests: list[TestCase]
     reference_ms: int = 0
+    reference_ms_by_language: dict[str, int] = Field(default_factory=dict)
     language: Language = Language.PYTHON
 
     @property

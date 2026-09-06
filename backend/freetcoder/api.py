@@ -77,14 +77,21 @@ class CaseInput(BaseModel):
     assert_expected: bool = False
 
 
+#: Every case is executed, so an unbounded list is a way to tie up the runner.
+#: Well above anything a person edits by hand.
+MAX_CASES = 50
+
+
 class RunRequest(BaseModel):
     source: str
     language: Language = Language.PYTHON
     #: The full case list from the Testcase tab, replacing the question's
     #: examples. Omitted means "use the question's examples as authored".
-    cases: list[CaseInput] | None = None
+    cases: list[CaseInput] | None = Field(default=None, max_length=MAX_CASES)
     #: Retained for older clients: appended after `cases`.
-    extra_cases: list[dict[str, Any]] = Field(default_factory=list)
+    extra_cases: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=MAX_CASES
+    )
 
 
 # ------------------------------------------------------------------- setup

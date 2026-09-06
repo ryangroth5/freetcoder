@@ -195,3 +195,52 @@ class TestFailuresExplainThemselves:
         assert "boom" in _failure_detail(
             Verdict.RUNTIME_ERROR, [CaseResult(ok=False, error="boom")], "generic noise"
         )
+
+
+class TestCorrectnessGuards:
+    """Checks for ways the gate could previously pass something unsound."""
+
+    ALL = [Language.PYTHON, Language.JAVASCRIPT, Language.TYPESCRIPT]
+
+    def test_a_stated_complexity_target_requires_a_brute_force(self) -> None:
+        """Otherwise the target is decoration: nothing proves the tests bite."""
+        q = load("two_sum_good")
+        q.complexity_target = "O(n)"
+        q.brute_force_py = None
+        report = validate_question(q)
+        assert report.outcome is GateOutcome.MISSING_BRUTE_FORCE
+        assert "O(n)" in report.detail
+
+    def test_no_target_means_no_brute_force_is_required(self) -> None:
+        q = load("two_sum_good")
+        q.complexity_target = None
+        q.brute_force_py = None
+        assert validate_question(q).accepted
+
+    def test_answers_beyond_2_53_are_rejected_when_js_is_offered(self) -> None:
+        """IEEE-754 doubles lose integer precision there, silently."""
+        q = load("two_sum_multilang")
+        q.hidden_generator_py = (
+            "import json\n"
+            "for _ in range(12):\n"
+            "    print(json.dumps({'args': {'nums': [2**53 + 1, 1], 'target': 2**53 + 2}}))\n"
+        )
+        report = validate_question(q, languages=self.ALL)
+        assert report.outcome is GateOutcome.UNSAFE_MAGNITUDE
+        assert "2^53" in report.detail
+
+    def test_large_integers_are_fine_when_only_python_is_offered(self) -> None:
+        q = load("two_sum_good")
+        q.hidden_generator_py = (
+            "import json\n"
+            "for _ in range(12):\n"
+            "    print(json.dumps({'args': {'nums': [2**60, 1], 'target': 2**60 + 1}}))\n"
+        )
+        report = validate_question(q, languages=[Language.PYTHON])
+        assert report.outcome is not GateOutcome.UNSAFE_MAGNITUDE
+
+    def test_per_language_reference_timings_are_recorded(self) -> None:
+        """A JS submission must be budgeted against a JS reference."""
+        report = validate_question(load("two_sum_multilang"), languages=self.ALL)
+        assert report.accepted, report.detail
+        assert set(report.reference_ms_by_language) >= {"python", "javascript"}

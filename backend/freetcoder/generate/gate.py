@@ -206,6 +206,17 @@ def _check_brute_force_discriminates(
          decoration.
     """
     if not q.brute_force_py:
+        if q.complexity_target:
+            # Otherwise a claimed target goes entirely unenforced with no signal
+            # -- the decorative performance score this gate exists to prevent.
+            return GateReport(
+                outcome=GateOutcome.MISSING_BRUTE_FORCE,
+                detail=(
+                    f"the question states a complexity target "
+                    f"({q.complexity_target}) but supplies no brute_force_py, so "
+                    f"nothing proves the tests actually reject a naive solution"
+                ),
+            )
         return None
 
     small = sorted(hidden, key=lambda c: len(json.dumps(c.args)))[:5]
@@ -243,6 +254,7 @@ def _check_other_languages(
     hidden: list[TestCase],
     languages: Sequence[Language],
     oracle: Language,
+    timings: dict[str, int] | None = None,
 ) -> GateReport | None:
     """Every language the format offers must reproduce the oracle's answers.
 
@@ -271,6 +283,10 @@ def _check_other_languages(
                     f"{_failure_detail(verdict, results, stderr)}"
                 ),
             )
+        if timings is not None and len(results) > 1:
+            # Drop the first case: on a JIT runtime it carries warmup that has
+            # nothing to do with the algorithm.
+            timings[lang.value] = int(sum(r.ms for r in results[1:]))
         for case, res in zip(sample, results, strict=True):
             if not res.ok or not values_equal(case.expected, res.value):
                 return GateReport(
@@ -281,6 +297,47 @@ def _check_other_languages(
                         f"got {res.value!r}{' / ' + res.error[:120] if res.error else ''}"
                     ),
                 )
+    return None
+
+
+#: Beyond this, IEEE-754 doubles lose integer precision, so a Python oracle and
+#: a JavaScript reference can disagree with nothing anywhere reporting an error.
+JS_SAFE_INTEGER = 2**53
+
+
+def _exceeds_safe_integer(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return abs(value) > JS_SAFE_INTEGER
+    if isinstance(value, list):
+        return any(_exceeds_safe_integer(v) for v in value)
+    if isinstance(value, dict):
+        return any(_exceeds_safe_integer(v) for v in value.values())
+    return False
+
+
+def _check_magnitudes(
+    cases: list[TestCase], languages: Sequence[Language]
+) -> GateReport | None:
+    """Reject answers JavaScript cannot represent exactly.
+
+    Cheaper and far kinder than letting a candidate lose to invisible rounding.
+    """
+    if not any(
+        lang in (Language.JAVASCRIPT, Language.TYPESCRIPT) for lang in languages
+    ):
+        return None
+    for i, case in enumerate(cases):
+        if _exceeds_safe_integer(case.expected) or _exceeds_safe_integer(case.args):
+            return GateReport(
+                outcome=GateOutcome.UNSAFE_MAGNITUDE,
+                detail=(
+                    f"case {i + 1} involves an integer beyond 2^53, which "
+                    f"JavaScript cannot represent exactly; keep values within "
+                    f"±9007199254740992 while JS or TS are offered"
+                ),
+            )
     return None
 
 
@@ -309,14 +366,22 @@ def validate_question(
     if report is not None:
         return report
 
+    offered = list(languages or [language])
+    if (report := _check_magnitudes(hidden + list(q.visible_tests), offered)) is not None:
+        return report
+
     if (report := _check_brute_force_discriminates(q, sig, hidden)) is not None:
         return report
 
+    timings: dict[str, int] = {language.value: reference_ms}
     if languages:
-        report = _check_other_languages(q, hidden, languages, language)
+        report = _check_other_languages(q, hidden, languages, language, timings)
         if report is not None:
             return report
 
     return GateReport(
-        outcome=GateOutcome.ACCEPTED, hidden_cases=hidden, reference_ms=reference_ms
+        outcome=GateOutcome.ACCEPTED,
+        hidden_cases=hidden,
+        reference_ms=reference_ms,
+        reference_ms_by_language=timings,
     )

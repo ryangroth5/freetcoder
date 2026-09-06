@@ -671,3 +671,55 @@ class TestQuestionVariety:
         fake_llm._queue.clear()  # noqa: SLF001 - simulating "nothing configured"
         resp = await client.post("/api/sessions", json={"style": "leetcode"})
         assert resp.status_code in (428, 502)
+
+
+class TestCaseLimits:
+    async def test_too_many_cases_is_rejected_rather_than_executed(
+        self, client: AsyncClient
+    ) -> None:
+        """Every case is executed, so an unbounded list ties up the runner."""
+        sid = await start_session(client)
+        cases = [{"args": {"nums": [1, 2], "target": 3}, "assert_expected": False}
+                 for _ in range(500)]
+        resp = await client.post(f"/api/sessions/{sid}/questions/0/run",
+                                 json={"source": SOLUTION, "cases": cases})
+        assert resp.status_code == 422
+
+    async def test_the_cap_is_generous_enough_for_real_use(
+        self, client: AsyncClient
+    ) -> None:
+        sid = await start_session(client)
+        cases = [{"args": {"nums": [1, 2], "target": 3}, "expected": [0, 1],
+                  "assert_expected": True} for _ in range(50)]
+        resp = await client.post(f"/api/sessions/{sid}/questions/0/run",
+                                 json={"source": SOLUTION, "cases": cases})
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 50
+
+
+class TestPerLanguagePerformanceBudget:
+    async def test_javascript_is_budgeted_against_a_javascript_reference(
+        self, client: AsyncClient
+    ) -> None:
+        """Judging JS by a Python-derived number measures the runtime, not the code."""
+        sid = await start_session(client, style="codility")
+        q = (await client.get(f"/api/sessions/{sid}/questions/0")).json()
+        assert q["title"]
+
+        source = (
+            "function two_sum(nums, target) {\n"
+            "  const seen = new Map();\n"
+            "  for (let i = 0; i < nums.length; i++) {\n"
+            "    if (seen.has(target - nums[i])) "
+            "return [seen.get(target - nums[i]), i];\n"
+            "    seen.set(nums[i], i);\n"
+            "  }\n  return [];\n}\nmodule.exports = { two_sum };\n"
+        )
+        body = (await client.post(f"/api/sessions/{sid}/questions/0/submit",
+                                  json={"source": source,
+                                        "language": "javascript"})).json()
+        assert body["verdict"] == "ok", str(body)[:300]
+        # A correct JS solution must not be flagged slow purely for being JS.
+        assert not any(c["over_budget"] for c in body["cases"]), (
+            "a correct JavaScript solution was judged over budget"
+        )

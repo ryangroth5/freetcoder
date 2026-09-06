@@ -143,6 +143,7 @@ async def generate_question(
                 question=candidate,
                 hidden_tests=report.hidden_cases,
                 reference_ms=report.reference_ms,
+                reference_ms_by_language=report.reference_ms_by_language,
                 language=language,
             )
             return result
