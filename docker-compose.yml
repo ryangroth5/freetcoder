@@ -1,0 +1,93 @@
+# dev  : bind-mounted source, hot reload, two ports
+# prod : self-contained image, one port, optional /data volume
+services:
+  dev:
+    build:
+      context: .
+      target: dev
+    # PID 1 must reap. Submissions that fork leave orphaned grandchildren which
+    # reparent to PID 1; unreaped they linger as zombies holding PID slots, and
+    # zombies count against the per-UID RLIMIT_NPROC quota.
+    init: true
+    # READ-ONLY source mount. During discovery a submission wrote a file into
+    # the host repo through a writable mount; macOS bind mounts ignore chmod,
+    # so read-only is the only thing that actually stops it.
+    # The backend is the only service that executes untrusted submissions, so
+    # it gets read-only source and does not mount the frontend at all.
+    volumes:
+      - ./backend:/srv/app/backend:ro
+      - ./library:/srv/app/library:ro
+      - freetcoder-data:/data
+    environment:
+      PYTHONPATH: /srv/app/backend
+      FREETCODER_DB_PATH: /data/freetcoder.db
+      FREETCODER_LLM_BASE_URL: ${FREETCODER_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      FREETCODER_LLM_API_KEY: ${FREETCODER_LLM_API_KEY:-}
+      FREETCODER_LLM_MODEL: ${FREETCODER_LLM_MODEL:-anthropic/claude-sonnet-4.5}
+      # Set to 1 to serve recorded questions with no API key (used by e2e).
+      FREETCODER_FAKE_LLM: ${FREETCODER_FAKE_LLM:-0}
+      FREETCODER_LIBRARY_URL: ${FREETCODER_LIBRARY_URL:-http://library:8090}
+    ports:
+      # 8081 so the dev backend and the prod container can run side by side.
+      - "8081:8080"
+    tmpfs:
+      # Submissions execute here. exec is required; nosuid/nodev are not.
+      - /tmp:exec,mode=1777,size=256m
+
+  # The question library: a separate service with its own database, so
+  # centralizing and securing it later does not touch the app.
+  library:
+    build:
+      context: .
+      target: library
+    init: true
+    volumes:
+      - ./library:/srv/app/library:ro
+      - freetcoder-library:/data
+    environment:
+      LIBRARY_DB_PATH: /data/library.db
+    ports:
+      - "8090:8090"
+
+  # Vite dev server with HMR, proxying /api and /lsp to the dev backend.
+  web:
+    build:
+      context: .
+      target: dev
+    working_dir: /srv/app/frontend
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    # Writable: Vite needs it, and this service never runs submissions.
+    # node_modules is a named volume so container Linux builds never collide
+    # with host macOS builds.
+    volumes:
+      - ./frontend:/srv/app/frontend
+      - freetcoder-node-modules:/srv/app/frontend/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - dev
+
+  prod:
+    build:
+      context: .
+      target: prod
+    init: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - freetcoder-data:/data
+    environment:
+      FREETCODER_LLM_BASE_URL: ${FREETCODER_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      FREETCODER_LLM_API_KEY: ${FREETCODER_LLM_API_KEY:-}
+      FREETCODER_LLM_MODEL: ${FREETCODER_LLM_MODEL:-anthropic/claude-sonnet-4.5}
+      # Set to 1 to serve recorded questions with no API key.
+      FREETCODER_FAKE_LLM: ${FREETCODER_FAKE_LLM:-0}
+      FREETCODER_LIBRARY_URL: ${FREETCODER_LIBRARY_URL:-http://library:8090}
+    tmpfs:
+      - /tmp:exec,mode=1777,size=256m
+    profiles: ["prod"]
+
+volumes:
+  freetcoder-data:
+  freetcoder-library:
+  freetcoder-node-modules:

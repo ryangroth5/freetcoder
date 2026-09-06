@@ -1,0 +1,41 @@
+"""LLM access: one protocol, a real client and an offline fake."""
+
+from __future__ import annotations
+
+from ..settings import Settings, get_settings
+from .base import LLMClient, LLMError
+from .client import OpenAICompatibleClient
+from .fake import FakeLLM
+
+__all__ = [
+    "FakeLLM",
+    "LLMClient",
+    "LLMError",
+    "OpenAICompatibleClient",
+    "build_client",
+]
+
+
+def build_client(settings: Settings | None = None) -> LLMClient:
+    """Construct the configured client.
+
+    Falls back to an empty FakeLLM when no key is set, so the app boots and can
+    show its setup screen instead of crashing on import.
+    """
+    s = settings or get_settings()
+    if s.fake_llm:
+        import json
+
+        from .fake import FIXTURE_DIR
+
+        payloads = [json.loads((FIXTURE_DIR / "two_sum_good.json").read_text())] * 50
+        return FakeLLM(payloads)
+    if not s.configured:
+        return FakeLLM()
+    return OpenAICompatibleClient(
+        base_url=s.llm_base_url,
+        api_key=s.llm_api_key,
+        model=s.llm_model,
+        timeout_s=s.llm_timeout_s,
+        max_retries=s.llm_max_retries,
+    )

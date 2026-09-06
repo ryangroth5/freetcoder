@@ -1,0 +1,55 @@
+id: coderbyte
+label: Coderbyte
+description: >
+  Employer-configurable screen mixing algorithmic and practical challenges;
+  speed contributes to the score.
+difficulty_locked: false
+session:
+  question_count: 3
+  timing: total
+  total_seconds: 3600
+  allow_skip: true
+  allow_revisit: true
+  difficulty_curve: [easy, medium, medium]
+generation:
+  style: coderbyte
+  prose_length: short
+  worked_example: true
+  real_world_framing: true
+  allow_diagrams: true
+  give_hints: true
+environment:
+  languages: [python, javascript, typescript]
+  scaffold: function_signature
+  visible_tests: 2
+scoring:
+  # Coderbyte awards "time period points", so speed genuinely matters.
+  mode: composite
+  weight_correctness: 0.75
+  weight_speed: 0.25
+  weight_performance: 0.0
+  hidden_test_count: 12
+presets:
+  - id: standard_screen
+    label: Standard screen
+    intent: >-
+      a typical Coderbyte screening challenge: short, practical, quickly solvable
+  - id: practical
+    label: Practical / real-world
+    intent: >-
+      a practical task: parsing, validation or string wrangling of the kind that shows up in day-to-day work
+    real_world_framing: true
+    topics: [strings, regex, parsing]
+  - id: algorithms_only
+    label: Algorithm-only
+    intent: >-
+      a purely algorithmic challenge with no real-world dressing
+    real_world_framing: false
+    topics: [algorithms, recursion, dynamic programming]
+  - id: sprint
+    label: Timed sprint
+    intent: >-
+      a short sprint question that can be solved in a few minutes under time pressure
+    question_count: 5
+    total_seconds: 1800
+    difficulty: [easy, easy, medium, medium, hard]

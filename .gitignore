@@ -1,0 +1,17 @@
+PWNED*
+__pycache__/
+*.py[co]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+dist/
+.env
+*.db
+.venv/
+
+# Playwright output (written through the dev bind mount)
+frontend/test-results/
+playwright-report/
+.DS_Store
+*.bak

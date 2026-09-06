@@ -1,0 +1,51 @@
+id: leetcode
+label: LeetCode
+description: Self-paced algorithmic puzzles with full examples and constraints.
+# Flat and self-paced, so difficulty is the user's to choose.
+difficulty_locked: false
+session:
+  question_count: 1
+  timing: untimed
+  allow_skip: true
+  allow_revisit: true
+generation:
+  style: leetcode
+  prose_length: medium
+  worked_example: true
+  allow_diagrams: true
+  give_hints: true
+environment:
+  languages: [python, javascript, typescript]
+  scaffold: function_signature
+  visible_tests: 2
+scoring:
+  mode: binary
+  hidden_test_count: 12
+presets:
+  - id: easy_warmup
+    label: Easy warm-up
+    intent: >-
+      a gentle warm-up: one clear idea, no heavy edge cases
+    difficulty: [easy]
+  - id: medium_grind
+    label: Medium grind
+    intent: >-
+      a standard interview medium: one non-obvious insight, then routine implementation
+    difficulty: [medium]
+  - id: hard
+    label: Hard
+    intent: >-
+      a hard problem needing a genuine algorithmic insight, not just careful coding
+    difficulty: [hard]
+  - id: blind75
+    label: Blind 75 style
+    intent: >-
+      the Blind 75 canon: the classic interview patterns -- sliding window, two pointers, binary search on answer, tree traversal, interval merging, 1-D dynamic programming
+    difficulty: [medium]
+    topics: [arrays, strings, trees, graphs, dynamic programming, intervals]
+  - id: interview150
+    label: Top interview 150
+    intent: >-
+      the Top Interview 150 style: bread-and-butter problems a candidate is very likely to be asked, favouring hash maps, two pointers and simple tree work
+    difficulty: [medium]
+    topics: [arrays, hash maps, two pointers, sliding window, trees]

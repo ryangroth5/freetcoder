@@ -1,0 +1,53 @@
+id: codesignal_gca
+label: CodeSignal GCA
+description: >
+  Four questions of ascending difficulty in 70 minutes, all visible at once.
+  Implementation-heavy with long prose; no hints, scored 200-600.
+# The GCA *is* four ascending questions in 70 minutes. Letting the user pick a
+# difficulty would stop it simulating anything.
+difficulty_locked: true
+session:
+  question_count: 4
+  timing: total
+  total_seconds: 4200
+  allow_skip: true
+  allow_revisit: true
+  difficulty_curve: [easy, easy, medium, hard]
+generation:
+  style: codesignal
+  prose_length: long
+  worked_example: true
+  allow_diagrams: true
+  real_world_framing: false
+  # The real assessment offers no hints; giving them would flatter the score.
+  give_hints: false
+environment:
+  languages: [python, javascript, typescript]
+  scaffold: function_signature
+  visible_tests: 2
+scoring:
+  mode: composite
+  weight_correctness: 0.6
+  weight_speed: 0.2
+  weight_performance: 0.2
+  hidden_test_count: 14
+  score_range: [200, 600]
+presets:
+  - id: full_gca
+    label: Full GCA simulation
+    intent: >-
+      a full GCA simulation: specification-heavy implementation, ascending difficulty
+  - id: q1_q2_drill
+    label: Q1/Q2 drill
+    intent: >-
+      the opening questions of a GCA: short, mechanical, mostly array and string handling
+    question_count: 2
+    difficulty: [easy, easy]
+    total_seconds: 1500
+  - id: q4_hard_drill
+    label: Q4 hard drill
+    intent: >-
+      the final GCA question: long specification, several interacting rules, simulation rather than a clever trick
+    question_count: 1
+    difficulty: [hard]
+    total_seconds: 2400

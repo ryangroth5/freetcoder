@@ -1,0 +1,63 @@
+id: codility
+label: Codility
+description: >
+  Real-world-framed tasks with explicit complexity targets. Correctness and
+  performance are scored separately.
+difficulty_locked: false
+session:
+  question_count: 3
+  timing: total
+  total_seconds: 7200
+  allow_skip: true
+  allow_revisit: true
+  difficulty_curve: [easy, medium, hard]
+generation:
+  style: codility
+  prose_length: medium
+  worked_example: true
+  # The defining trait: a stated complexity budget the tests actually enforce.
+  state_complexity_target: true
+  real_world_framing: true
+  allow_diagrams: true
+  give_hints: false
+environment:
+  languages: [python, javascript, typescript]
+  scaffold: function_signature
+  visible_tests: 2
+scoring:
+  mode: proportional
+  hidden_test_count: 16
+  perf_tests: true
+presets:
+  - id: full_test
+    label: Full test (3 tasks, 120 min)
+    intent: >-
+      a standard Codility task set: real-world framing reducing to a clean algorithmic core
+  - id: performance
+    label: Performance-focused
+    intent: >-
+      a performance-critical task where the naive solution is quadratic and must fail the large cases
+    perf_tests: true
+    state_complexity_target: true
+    question_count: 2
+    difficulty: [medium, hard]
+  - id: correctness
+    label: Correctness-focused
+    intent: >-
+      a correctness-focused task rich in edge cases: empty input, single element, all-equal values, extreme bounds
+    perf_tests: false
+    state_complexity_target: false
+  - id: lesson_arrays
+    label: "Lesson: arrays"
+    intent: >-
+      a Codility lesson on arrays and prefix sums
+    topics: [arrays, prefix sums]
+    question_count: 2
+    difficulty: [easy, medium]
+  - id: lesson_sorting
+    label: "Lesson: sorting"
+    intent: >-
+      a Codility lesson on sorting and searching
+    topics: [sorting, searching]
+    question_count: 2
+    difficulty: [easy, medium]
