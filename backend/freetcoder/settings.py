@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     #: How many times to regenerate before giving up on a question slot.
     generation_attempts: int = 4
 
+    #: Patch-and-re-gate rounds per generated question, before regenerating.
+    #: Bounded so a confused model cannot spend unlimited tokens or time.
+    repair_rounds: int = 3
+
+    #: How many times the model may execute code while repairing one question.
+    tool_call_budget: int = 6
+
     #: The question library service. Empty disables publishing and browsing;
     #: unreachable degrades the same way. Practice never depends on it.
     library_url: str = ""

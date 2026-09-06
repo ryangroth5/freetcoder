@@ -28,6 +28,7 @@ from ..models import (
     TestCase,
 )
 from .gate import validate_question
+from .tools import TOOL_SCHEMAS, dispatch
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +152,11 @@ Return a **patch** to the single artifact named in `target`, not a new question.
 Keep everything else exactly as it is: the statement, the title and the other
 artifacts are not yours to change here.
 
+You may call `run_code` and `run_against_cases` to test your fix before
+returning it. They execute in the same sandbox the harness uses, so what you see
+is exactly what validation will see. Use them -- a patch you have run is worth
+far more than one you have reasoned about.
+
 Rules that the harness enforces, and that your patch must satisfy:
 - Python: define the function at module level.
 - JavaScript: `module.exports = { fn };` is required.
@@ -202,6 +208,7 @@ async def repair_question(
     language: Language = Language.PYTHON,
     languages: list[Language] | None = None,
     rounds: int = 3,
+    tool_budget: int = 6,
 ) -> tuple[GeneratedQuestion | None, GateReport, list[GateOutcome]]:
     """Patch and re-gate until the question passes or the budget runs out.
 
@@ -220,11 +227,15 @@ async def repair_question(
 
         at_fault = _language_at_fault(current_report, language)
         try:
-            patch = await client.complete_json(
+            patch = await client.complete_json_with_tools(
                 system=REPAIR_SYSTEM,
                 user=build_repair_prompt(current, current_report, target, at_fault),
                 schema=QuestionPatch,
-                temperature=0.3,  # repair is a precision task, not a creative one
+                tools=TOOL_SCHEMAS,
+                dispatch=dispatch,
+                # Repair is a precision task, not a creative one.
+                temperature=0.3,
+                tool_budget=tool_budget,
             )
         except LLMError as exc:
             log.warning("repair round %d: model call failed: %s", round_no + 1, exc)

@@ -237,6 +237,15 @@ def build_python_harness(function_name: str) -> str:
     )
 
 
+def get_harness_for(language: object, function_name: str) -> str:
+    """The driver for `language`, without importing the adapter registry."""
+    return (
+        build_python_harness(function_name)
+        if str(language) == "python"
+        else build_js_harness(function_name)
+    )
+
+
 def build_js_harness(function_name: str) -> str:
     """Driver for JavaScript, and for TypeScript once tsc has emitted JS.
 

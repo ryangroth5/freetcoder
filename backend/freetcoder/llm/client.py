@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import Any, TypeVar
 
 from openai import APIError, AsyncOpenAI
@@ -39,6 +40,11 @@ def _extract_json(text: str) -> str:
 
 class OpenAICompatibleClient:
     """Talks to any OpenAI-compatible endpoint."""
+
+    #: Set to False the first time a tool-call request is refused, so we stop
+    #: paying for a round trip the provider cannot serve. Local endpoints vary
+    #: widely here, and the feedback loop works without tools.
+    supports_tools: bool | None = None
 
     def __init__(
         self,
@@ -80,6 +86,100 @@ class OpenAICompatibleClient:
                 last = exc
                 log.warning("LLM request failed (attempt %d): %s", attempt + 1, exc)
         raise LLMError(f"no valid response after {self._max_retries} attempts: {last}") from last
+
+    async def complete_json_with_tools(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[M],
+        tools: list[dict[str, Any]],
+        dispatch: Callable[[str, dict[str, Any]], str],
+        temperature: float = 0.3,
+        tool_budget: int = 6,
+    ) -> M:
+        """Let the model run code before answering, then validate its answer.
+
+        Falls back to `complete_json` when the provider cannot do tool calls, so
+        a local model without tool support still repairs questions -- just
+        without being able to test its work first.
+        """
+        if self.supports_tools is False:
+            return await self.complete_json(
+                system=system, user=user, schema=schema, temperature=temperature
+            )
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+
+        for _ in range(tool_budget):
+            # Built as a dict for the same reason as _request: the SDK's typed
+            # overloads do not accept the plain message/tool dicts we assemble.
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "temperature": temperature,
+                "messages": messages,
+                "tools": tools,
+                "response_format": {"type": "json_object"},
+            }
+            try:
+                resp = await self._client.chat.completions.create(**kwargs)
+            except APIError as exc:
+                log.info("provider refused tool calls (%s); continuing without", exc)
+                self.supports_tools = False
+                return await self.complete_json(
+                    system=system, user=user, schema=schema, temperature=temperature
+                )
+
+            self.supports_tools = True
+            message = resp.choices[0].message
+            calls = getattr(message, "tool_calls", None)
+
+            if not calls:
+                content = message.content or ""
+                try:
+                    return schema.model_validate_json(_extract_json(content))
+                except ValidationError as exc:
+                    # Ask for a correction in place rather than restarting: the
+                    # transcript holds everything the model has learned so far.
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({
+                        "role": "user",
+                        "content": f"That did not validate. Fix exactly this:\n{exc}",
+                    })
+                    continue
+
+            messages.append({
+                "role": "assistant",
+                "content": message.content or "",
+                "tool_calls": [
+                    {
+                        "id": c.id,
+                        "type": "function",
+                        "function": {
+                            "name": c.function.name,
+                            "arguments": c.function.arguments,
+                        },
+                    }
+                    for c in calls
+                ],
+            })
+            for call in calls:
+                try:
+                    arguments = json.loads(call.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    arguments = {}
+                result = dispatch(call.function.name, arguments)
+                log.info("tool %s -> %d chars", call.function.name, len(result))
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": result,
+                })
+
+        raise LLMError(f"no valid response within a budget of {tool_budget} tool calls")
 
     async def _request(
         self, system: str, user: str, schema: type[M], temperature: float, mode: str

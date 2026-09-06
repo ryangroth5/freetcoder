@@ -149,6 +149,7 @@ async def obtain_question(
     language: Language = Language.PYTHON,
     exclude_ids: list[str] | None = None,
     max_attempts: int = 4,
+    repair_rounds: int | None = None,
 ) -> tuple[str, GatedQuestion] | None:
     """Generate a fresh question, falling back to the cache if that fails.
 
@@ -166,9 +167,16 @@ async def obtain_question(
     key = cache_key(config, difficulty.value, language)
 
     if _can_generate(client):
+        from .settings import get_settings
+
+        settings = get_settings()
         result = await generate_question(
             client, config, difficulty=difficulty, language=language,
             max_attempts=max_attempts,
+            repair_rounds=(
+                settings.repair_rounds if repair_rounds is None else repair_rounds
+            ),
+            tool_budget=settings.tool_call_budget,
         )
         if result.accepted and result.question is not None:
             qid = await store.cache_question(key, result.question)

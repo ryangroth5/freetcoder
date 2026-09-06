@@ -8,9 +8,10 @@ generator CLI run offline too, which is how the gate's own fixtures were built.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -21,6 +22,14 @@ M = TypeVar("M", bound=BaseModel)
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "llm"
 
 
+@dataclass
+class ToolCall:
+    """A tool invocation to replay. The tool really runs."""
+
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
 class FakeLLM:
     """Returns queued responses in order.
 
@@ -28,9 +37,17 @@ class FakeLLM:
     (raised), so tests can rehearse provider failures and malformed output.
     """
 
+    #: Mirrors the real client's capability flag. Tests set it False to
+    #: rehearse a provider that cannot do tool calls.
+    supports_tools: bool | None = None
+
     def __init__(self, responses: Sequence[object] | None = None) -> None:
         self._queue: list[object] = list(responses or [])
         self.calls: list[tuple[str, str]] = []
+        #: Every tool invocation the loop made, for assertions.
+        self.tool_calls: list[tuple[str, dict[str, Any]]] = []
+        #: What each replayed tool actually returned.
+        self.tool_results: list[str] = []
 
     @classmethod
     def from_fixtures(cls, *names: str) -> FakeLLM:
@@ -61,6 +78,38 @@ class FakeLLM:
             return schema.model_validate(item)
         except ValidationError as exc:
             raise LLMError(f"fixture does not satisfy {schema.__name__}: {exc}") from exc
+
+    async def complete_json_with_tools(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[M],
+        tools: list[dict[str, Any]],
+        dispatch: Callable[[str, dict[str, Any]], str],
+        temperature: float = 0.3,
+        tool_budget: int = 6,
+    ) -> M:
+        """Replay queued items, running any ToolCall against the real dispatcher.
+
+        Queue a `ToolCall` to rehearse the model probing its own code; the tool
+        genuinely executes, so these tests exercise the sandbox too.
+        """
+        if self.supports_tools is False:
+            return await self.complete_json(
+                system=system, user=user, schema=schema, temperature=temperature
+            )
+        for _ in range(tool_budget):
+            if self._queue and isinstance(self._queue[0], ToolCall):
+                call = self._queue.pop(0)
+                assert isinstance(call, ToolCall)
+                self.tool_calls.append((call.name, call.arguments))
+                self.tool_results.append(dispatch(call.name, call.arguments))
+                continue
+            return await self.complete_json(
+                system=system, user=user, schema=schema, temperature=temperature
+            )
+        raise LLMError(f"no valid response within a budget of {tool_budget} tool calls")
 
     @property
     def exhausted(self) -> bool:

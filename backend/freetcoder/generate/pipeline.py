@@ -129,6 +129,7 @@ async def generate_question(
     language: Language = Language.PYTHON,
     max_attempts: int = 4,
     repair_rounds: int = 3,
+    tool_budget: int = 6,
     exclude_titles: list[str] | None = None,
 ) -> GenerationResult:
     """Produce one gate-approved question, or report why we could not.
@@ -177,6 +178,7 @@ async def generate_question(
                 language=language,
                 languages=list(config.environment.languages),
                 rounds=repair_rounds,
+                tool_budget=tool_budget,
             )
             for outcome in history:
                 result.attempts.append(

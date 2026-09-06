@@ -5,13 +5,14 @@ from __future__ import annotations
 from ..settings import Settings, get_settings
 from .base import LLMClient, LLMError
 from .client import OpenAICompatibleClient
-from .fake import FakeLLM
+from .fake import FakeLLM, ToolCall
 
 __all__ = [
     "FakeLLM",
     "LLMClient",
     "LLMError",
     "OpenAICompatibleClient",
+    "ToolCall",
     "build_client",
 ]
 
