@@ -509,13 +509,46 @@ client's documentSelector matches nothing, and diagnostics stop.
 Colour is decoration; correct language identification is not. The eager manual
 registration stays.
 
+## What readiness actually awaits (traced)
+
+`whenReady()` awaits `addExtensionPromise`, whose first line is
+`await waitServicesReady()` -- a `Barrier` in
+`@codingame/monaco-vscode-api/lifecycle.js`. Only `startup()` opens it, and
+`startup` is called by `initialize()` in that package's `services.js`, which
+`monaco-languageclient`'s `importAllServices` does call.
+
+So the chain exists. It simply never completes: **the barrier itself is still
+closed ten seconds after the editor is up and working**, measured by importing
+`waitServicesReady` directly in `EditorPane` and racing it against a timeout.
+
+That is the single fact the next attempt should start from. The editor, the
+language client and diagnostics all work with the barrier shut; only extension
+registration waits on it.
+
+Ruled out along the way:
+
+- **Not module duplication.** There is exactly one `@codingame/monaco-vscode-api`
+  in `node_modules`, and our own direct import of `waitServicesReady` hangs on
+  the same barrier the extensions do.
+- **Not a dev-only prebundling artifact.** `optimizeDeps.exclude` covers the
+  four extension packages while `monaco-vscode-api` is prebundled, which could
+  have produced two `lifecycle.js` instances -- but the built production bundle,
+  which does no prebundling, shows the same `mtk1`-only tokens. (That probe also
+  confirmed diagnostics work in prod: `squiggly-inline-unnecessary` was present.)
+- **`enableExtHostWorker: true` makes it worse.** This supported flag on
+  `vscodeApiConfig` looked like the missing piece. It leaves the editor
+  unrendered entirely -- `onLoad` never fires and no languages register at all.
+- **`getExtensionServiceOverride()` alone is not enough.** Passing it through
+  `vscodeApiConfig.serviceOverrides` (which the wrapper does merge) leaves the
+  barrier shut.
+
 ## Where to go next
-1. Find what `registerExtension`'s readiness actually awaits -- most likely
-   `ILifecycleService` reaching a phase that needs more of the workbench than
-   `extended` mode starts. If a modest set of extra service overrides gets
-   `whenReady()` to settle, everything else follows: the extension contributes
-   both the language and its grammar, and the manual registration becomes a
-   fallback for Go alone.
+1. Instrument `initialize()` in `monaco-languageclient`'s `importAllServices` to
+   find where it stalls or throws before `startup()` reaches
+   `serviceInitializedBarrier.open()`. `startup` awaits several
+   `serviceInitializeParticipants` in turn, and any one of them hanging would
+   produce exactly what is observed. This is the highest-value next step and it
+   is now a narrow question.
 2. Failing that, `classic` mode plus Monarch, accepting that the language client
    needs `extended` -- so this means establishing whether the two can coexist,
    which is a bigger question than colour.
