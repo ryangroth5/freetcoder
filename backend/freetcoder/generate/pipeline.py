@@ -25,6 +25,7 @@ from ..models import (
 from ..progress import NULL_REPORTER, Reporter
 from .gate import validate_question
 from .repair import repair_question
+from .sufficiency import check_statement_sufficiency
 
 log = logging.getLogger(__name__)
 
@@ -159,6 +160,7 @@ async def generate_question(
     max_attempts: int = 4,
     repair_rounds: int = 3,
     tool_budget: int = 6,
+    check_sufficiency: bool = True,
     exclude_titles: list[str] | None = None,
     report_to: Reporter = NULL_REPORTER,
 ) -> GenerationResult:
@@ -204,8 +206,26 @@ async def generate_question(
         )
 
         if report.accepted:
-            report_to("the question passed every check", kind="ok")
-            return _accept(result, candidate, report, language, config)
+            # The gate proves the question is internally sound. It never reads
+            # the statement, so this is where we find out whether a candidate
+            # could actually derive the answer from what they are given.
+            if check_sufficiency:
+                gap = await check_statement_sufficiency(
+                    client, candidate, report.hidden_cases,
+                    language=language, report_to=report_to,
+                )
+                if gap is not None:
+                    report = gap
+                    result.attempts.append(
+                        GenerationAttempt(gap.outcome, gap.detail[:300], candidate.title)
+                    )
+                    report_to(f"rejected: {gap.detail}"[:300], kind="warn")
+                else:
+                    report_to("the question passed every check", kind="ok")
+                    return _accept(result, candidate, report, language, config)
+            else:
+                report_to("the question passed every check", kind="ok")
+                return _accept(result, candidate, report, language, config)
 
         log.info(
             "attempt %d rejected (%s): %s", attempt + 1, report.outcome.value, report.detail
@@ -227,8 +247,24 @@ async def generate_question(
                     GenerationAttempt(outcome, title=candidate.title, repaired=True)
                 )
             if repaired is not None:
-                report_to("repaired, and it now passes", kind="ok")
-                return _accept(result, repaired, final_report, language, config)
+                # A repaired question is re-checked for sufficiency too: a
+                # rewritten statement is exactly the thing that might still not
+                # say enough.
+                gap = (
+                    await check_statement_sufficiency(
+                        client, repaired, final_report.hidden_cases,
+                        language=language, report_to=report_to,
+                    )
+                    if check_sufficiency else None
+                )
+                if gap is None:
+                    report_to("repaired, and it now passes", kind="ok")
+                    return _accept(result, repaired, final_report, language, config)
+                report = gap
+                result.attempts.append(
+                    GenerationAttempt(gap.outcome, gap.detail[:300],
+                                      repaired.title, repaired=True)
+                )
             report = final_report
         user = (
             f"{user}\n\n### Your previous attempt was rejected\n\n"

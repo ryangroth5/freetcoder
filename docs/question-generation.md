@@ -412,3 +412,55 @@ scaling check now runs first and names the reference.
 
 The measured growth is stored and shown beside the ratio, so the results pane
 says `1.3× the reference (~linear)` rather than a bare multiplier.
+
+---
+
+## Is the statement enough?
+
+Every other check validates the question **against itself**: the reference
+reproduces the examples, the generator obeys the constraints, the clarifications
+match the code, the scaffolds parse. None of them read the statement.
+
+So a question can pass everything and still be underivable from its own prose.
+That is not hypothetical — it is what happened with *Most Frequent Word*, which
+asked for "the word that appears most often" while its examples silently
+established that punctuation splits words and case is folded. Internally
+flawless; unfair to solve. `test_sufficiency.py` asserts the gate accepts that
+version, which is exactly the point.
+
+A second model therefore solves each question from the **statement, constraints,
+clarifications and worked examples alone** — no reference, no hidden cases — and
+its solution is run against the oracle. Disagreement means the prose is missing
+something, reported as `STATEMENT_INSUFFICIENT` and repairable through the
+`statement` target, which rewrites the prose, the clarifications, or both.
+
+### Why it lives outside the gate
+
+`gate.py` is synchronous, deterministic and LLM-free, which is what makes it the
+trust anchor and testable offline. This check needs a model, so it runs as a
+separate stage after the gate rather than inside it. The gate stays something you
+can reason about without a network.
+
+### It reports suspicion, not proof
+
+A second model failing does not *prove* ambiguity — it may simply be weaker.
+Three deliberate limits keep it from blaming the statement unfairly:
+
+- **Cases outside the stated constraints are excluded.** A failure on input the
+  question says cannot occur is the generator's fault, not the prose's.
+- **A provider failure is inconclusive**, not failing. Rejecting a good question
+  because an API call errored would be worse than not checking.
+- **A solution that will not even run is inconclusive.** That says more about
+  the attempt than about the statement.
+
+The verdict is worded "the statement may be under-specified" and carries the
+disagreeing case *and* what the attempt assumed — so a repair has something
+concrete to act on, and a human reading the log can judge for themselves.
+
+### Cost
+
+It roughly doubles generation time and tokens: a second solve, plus running it.
+`FREETCODER_CHECK_STATEMENT_SUFFICIENCY=0` turns it off. It is on by default
+because the alternative is questions you cannot fairly answer, and the
+acceptance-rate report lists its rejections separately so its value stays
+measurable rather than assumed.

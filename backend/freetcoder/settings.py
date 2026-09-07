@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     #: How many times the model may execute code while repairing one question.
     tool_call_budget: int = 6
 
+    #: Have a second model solve each question from its statement alone and
+    #: check the result against the oracle. Roughly doubles generation cost;
+    #: it is the only check that validates what the candidate actually reads.
+    check_statement_sufficiency: bool = True
+
     #: How many times the tutor may probe the reference in one reply.
     tutor_tool_budget: int = 4
     #: Questions per session, so a runaway client cannot spend without bound.

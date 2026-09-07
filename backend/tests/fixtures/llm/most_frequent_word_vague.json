@@ -1,0 +1,54 @@
+{
+  "title": "Most Frequent Word",
+  "difficulty": "easy",
+  "topics": [
+    "strings",
+    "hash maps"
+  ],
+  "statement_md": "A support inbox stores raw customer messages. Given a `message`, return the word that appears most often.\n",
+  "constraints_md": "- `message` is 0 to 10^5 printable ASCII characters",
+  "constraints": [
+    {
+      "name": "message",
+      "max_length": 100000
+    }
+  ],
+  "clarifications": [],
+  "hint_md": "Count first, then scan the original order to break ties.",
+  "signatures": [
+    {
+      "language": "python",
+      "function_name": "most_frequent_word",
+      "scaffold": "def most_frequent_word(message):\n    # your code here\n    pass\n",
+      "reference_solution": "import re\nfrom collections import Counter\n\ndef most_frequent_word(message):\n    words = re.findall(r'[a-z]+', message.lower())\n    if not words:\n        return ''\n    counts = Counter(words)\n    best = max(counts.values())\n    for w in words:\n        if counts[w] == best:\n            return w\n    return ''\n"
+    },
+    {
+      "language": "javascript",
+      "function_name": "most_frequent_word",
+      "scaffold": "function most_frequent_word(message) {\n  // your code here\n}\nmodule.exports = { most_frequent_word };\n",
+      "reference_solution": "function most_frequent_word(message) {\n  const words = (message.toLowerCase().match(/[a-z]+/g) || []);\n  if (words.length === 0) return '';\n  const counts = new Map();\n  for (const w of words) counts.set(w, (counts.get(w) || 0) + 1);\n  const best = Math.max(...counts.values());\n  for (const w of words) if (counts.get(w) === best) return w;\n  return '';\n}\nmodule.exports = { most_frequent_word };\n"
+    },
+    {
+      "language": "typescript",
+      "function_name": "most_frequent_word",
+      "scaffold": "export function most_frequent_word(message: string): string {\n  // your code here\n  return '';\n}\n",
+      "reference_solution": "export function most_frequent_word(message: string): string {\n  const words = message.toLowerCase().match(/[a-z]+/g) || [];\n  if (words.length === 0) return '';\n  const counts = new Map<string, number>();\n  for (const w of words) counts.set(w, (counts.get(w) || 0) + 1);\n  const best = Math.max(...Array.from(counts.values()));\n  for (const w of words) if (counts.get(w) === best) return w;\n  return '';\n}\n"
+    }
+  ],
+  "visible_tests": [
+    {
+      "args": {
+        "message": "The cat and the dog chased the cat"
+      },
+      "expected": "the"
+    },
+    {
+      "args": {
+        "message": "Hello, world! Hello again."
+      },
+      "expected": "hello"
+    }
+  ],
+  "hidden_generator_py": "import json, random\nrandom.seed(11)\nWORDS = ['the', 'cat', 'dog', 'log', 'inbox', 'alpha']\nprint(json.dumps({'args': {'message': ''}}))\nprint(json.dumps({'args': {'message': 'Hello, hello! HELLO?'}}))\nfor _ in range(12):\n    n = random.randint(1, 30)\n    parts = [random.choice(WORDS) for _ in range(n)]\n    print(json.dumps({'args': {'message': ' '.join(parts)}}))\n",
+  "brute_force_py": "import re\n\ndef most_frequent_word(message):\n    words = re.findall(r'[a-z]+', message.lower())\n    if not words:\n        return ''\n    best, chosen = -1, ''\n    for w in words:\n        c = sum(1 for x in words if x == w)\n        if c > best:\n            best, chosen = c, w\n    return chosen\n"
+}

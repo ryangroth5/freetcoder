@@ -168,6 +168,7 @@ class GateOutcome(enum.StrEnum):
     MISSING_BRUTE_FORCE = "missing_brute_force"
     SCAFFOLD_INVALID = "scaffold_invalid"
     REFERENCE_TOO_SLOW = "reference_too_slow"
+    STATEMENT_INSUFFICIENT = "statement_insufficient"
     BRUTE_FORCE_DISAGREES = "brute_force_disagrees"
     PERF_NOT_DISCRIMINATING = "perf_not_discriminating"
 

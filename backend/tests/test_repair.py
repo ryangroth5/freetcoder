@@ -213,7 +213,8 @@ class TestTheGateIsNotRepairable:
         targets = set(TARGET_FOR.values())
         assert targets <= {
             "reference", "scaffold", "generator", "brute_force",
-            "visible_tests", "constraints", "clarifications", "whole",
+            "visible_tests", "constraints", "clarifications", "statement",
+            "whole",
         }
 
         # Every target names part of the *question*, never part of the gate.
@@ -231,6 +232,7 @@ class TestTheGateIsNotRepairable:
                 "brute_force": "brute_force_py",
                 "visible_tests": "visible_tests",
                 "clarifications": "clarifications",
+                "statement": "statement_md",
             }[target]
             assert mapped in question_fields or mapped in signature_fields
 

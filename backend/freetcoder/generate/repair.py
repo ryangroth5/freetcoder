@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 
 RepairTarget = Literal[
     "reference", "scaffold", "generator", "brute_force", "visible_tests",
-    "constraints", "clarifications", "whole",
+    "constraints", "clarifications", "statement", "whole",
 ]
 
 #: Which artifact each rejection implicates. `VISIBLE_MISMATCH` is the one
@@ -49,6 +49,7 @@ TARGET_FOR: dict[GateOutcome, RepairTarget] = {
     GateOutcome.NO_HIDDEN_CASES: "generator",
     GateOutcome.CONSTRAINT_VIOLATION: "constraints",
     GateOutcome.CLARIFICATION_WRONG: "clarifications",
+    GateOutcome.STATEMENT_INSUFFICIENT: "statement",
     GateOutcome.UNSAFE_MAGNITUDE: "generator",
     GateOutcome.BRUTE_FORCE_DISAGREES: "brute_force",
     GateOutcome.MISSING_BRUTE_FORCE: "brute_force",
@@ -79,6 +80,9 @@ class QuestionPatch(BaseModel):
         default=None, description="Replacement clarifications"
     )
     constraints_md: str | None = None
+    statement_md: str | None = Field(
+        default=None, description="Replacement statement when target is 'statement'"
+    )
     reasoning: str = Field(default="", description="One sentence: what was wrong")
 
 
@@ -112,6 +116,18 @@ def apply_patch(q: GeneratedQuestion, patch: QuestionPatch) -> GeneratedQuestion
         if not patch.visible_tests:
             raise PatchError("a visible-tests patch needs replacement cases")
         updated.visible_tests = patch.visible_tests
+
+    elif patch.target == "statement":
+        # Under-specification is fixed by *saying more*, in the prose or the
+        # clarifications -- usually both.
+        if not patch.statement_md and patch.clarifications is None:
+            raise PatchError(
+                "a statement patch must change the statement or the clarifications"
+            )
+        if patch.statement_md:
+            updated.statement_md = patch.statement_md
+        if patch.clarifications is not None:
+            updated.clarifications = patch.clarifications
 
     elif patch.target == "clarifications":
         if patch.clarifications is None:
@@ -149,6 +165,13 @@ def _artifact_text(q: GeneratedQuestion, target: RepairTarget, language: Languag
     if target == "visible_tests":
         return json.dumps(
             [t.model_dump(mode="json") for t in q.visible_tests], indent=2
+        )
+    if target == "statement":
+        return (
+            f"statement_md:\n{q.statement_md}\n\n"
+            f"constraints_md:\n{q.constraints_md}\n\n"
+            f"clarifications:\n"
+            f"{json.dumps([c.model_dump(mode='json') for c in q.clarifications], indent=2)}"
         )
     if target == "clarifications":
         return json.dumps(
@@ -225,6 +248,7 @@ _TARGET_LABEL: dict[str, str] = {
     "visible_tests": "worked examples",
     "constraints": "stated constraints",
     "clarifications": "clarifications",
+    "statement": "statement, so it says what it currently leaves open",
 }
 
 

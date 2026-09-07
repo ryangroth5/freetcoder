@@ -179,6 +179,7 @@ async def obtain_question(
                 settings.repair_rounds if repair_rounds is None else repair_rounds
             ),
             tool_budget=settings.tool_call_budget,
+            check_sufficiency=settings.check_statement_sufficiency,
             report_to=report_to,
         )
         if result.accepted and result.question is not None:
