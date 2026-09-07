@@ -63,6 +63,27 @@ class ParamConstraint(BaseModel):
     element_max: float | None = Field(default=None, description="Maximum element")
 
 
+class Clarification(BaseModel):
+    """A question the prose leaves open, with a verified answer.
+
+    Supplied prose is routinely ambiguous: "find the word that appears most
+    often" does not say whether punctuation splits words, whether case matters,
+    or what a tie does. The candidate reads the statement; the grader runs the
+    reference. Without these, the reference *is* the specification and nobody
+    can read it.
+
+    The gate executes `probe` against the reference and rejects the question if
+    the code disagrees with `expect` -- the model asserts, the harness checks.
+    """
+
+    question: str = Field(min_length=3, max_length=200)
+    answer: str = Field(min_length=1, max_length=400)
+    #: Arguments demonstrating the answer, keyed by parameter name.
+    probe: dict[str, object] = Field(default_factory=dict)
+    #: What the reference returns for `probe`.
+    expect: object = None
+
+
 class Signature(BaseModel):
     """The function the candidate must implement, for one language."""
 
@@ -89,6 +110,11 @@ class GeneratedQuestion(BaseModel):
     constraints: list[ParamConstraint] = Field(
         default_factory=list,
         description="Machine-checkable version of constraints_md, one per parameter",
+    )
+    #: Answers to the questions the prose leaves open. Verified by execution.
+    clarifications: list[Clarification] = Field(
+        default_factory=list, max_length=8,
+        description="Ambiguities the statement does not settle, with a probe each",
     )
     hint_md: str | None = Field(
         default=None, description="Omitted for formats that give no candidate support"
@@ -137,6 +163,7 @@ class GateOutcome(enum.StrEnum):
     VISIBLE_MISMATCH = "visible_mismatch"
     NO_HIDDEN_CASES = "no_hidden_cases"
     CONSTRAINT_VIOLATION = "constraint_violation"
+    CLARIFICATION_WRONG = "clarification_wrong"
     UNSAFE_MAGNITUDE = "unsafe_magnitude"
     MISSING_BRUTE_FORCE = "missing_brute_force"
     SCAFFOLD_INVALID = "scaffold_invalid"

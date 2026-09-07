@@ -8,7 +8,7 @@ generator CLI run offline too, which is how the gate's own fixtures were built.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -42,8 +42,15 @@ class FakeLLM:
     supports_tools: bool | None = None
 
     def __init__(
-        self, responses: Sequence[object] | None = None, *, cycle: bool = False
+        self,
+        responses: Sequence[object] | None = None,
+        *,
+        cycle: bool = False,
+        chat_reply: str | None = None,
     ) -> None:
+        #: A canned tutor reply for offline mode. Tests leave it unset so a
+        #: mis-queued payload still fails loudly rather than being papered over.
+        self._chat_reply = chat_reply
         #: Replay the queue forever instead of running dry. Offline mode uses
         #: this: since the question cache became a fallback rather than the
         #: default source, every session generates, so a fixed number of canned
@@ -130,6 +137,67 @@ class FakeLLM:
                 system=system, user=user, schema=schema, temperature=temperature
             )
         raise LLMError(f"no valid response within a budget of {tool_budget} tool calls")
+
+    async def stream_chat(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        dispatch: Callable[[str, dict[str, Any]], str] | None = None,
+        temperature: float = 0.4,
+        tool_budget: int = 4,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Replay queued chat items as stream events.
+
+        Queue a string to have it delivered as tokens, or a ToolCall to have the
+        tool genuinely run -- so these tests exercise the sandbox too.
+
+        A queued item that is not a chat reply (a question payload, say) is an
+        error unless `chat_reply` was set: a test that queued the wrong thing
+        should say so rather than stream nonsense.
+        """
+        self.calls.append(
+            (system, messages[-1].get("content", "") if messages else "")
+        )
+
+        while self._queue and isinstance(self._queue[0], ToolCall):
+            call = self._queue.pop(0)
+            assert isinstance(call, ToolCall)
+            self.tool_calls.append((call.name, call.arguments))
+            result = dispatch(call.name, call.arguments) if dispatch else "unavailable"
+            self.tool_results.append(result)
+            yield {"type": "tool", "name": call.name, "result": result}
+
+        item: object
+        if self._queue and isinstance(self._queue[0], (str, Exception)):
+            item = self._queue.pop(0)
+        elif self._chat_reply is not None:
+            # Offline mode: the queue holds questions, not chat replies, and
+            # they must stay there for the next generation.
+            item = self._chat_reply
+        elif self._queue:
+            wrong = self._queue[0]
+            yield {
+                "type": "error",
+                "message": (
+                    f"FakeLLM.stream_chat expected a string reply, found "
+                    f"{type(wrong).__name__}; queue_next() a reply first"
+                ),
+            }
+            return
+        else:
+            yield {"type": "error", "message": "FakeLLM has nothing queued"}
+            return
+
+        if isinstance(item, Exception):
+            yield {"type": "error", "message": str(item)}
+            return
+
+        # Chunked, so a test can prove tokens arrive incrementally.
+        text = str(item)
+        for i in range(0, len(text), 8):
+            yield {"type": "token", "text": text[i : i + 8]}
 
     @property
     def exhausted(self) -> bool:

@@ -350,3 +350,46 @@ class TestScaffoldsMatchTheirLanguage:
         )
         report = validate_question(q, languages=self.ALL)
         assert report.outcome is not GateOutcome.SCAFFOLD_INVALID, report.detail
+
+
+class TestClarificationsAreVerified:
+    """A clarification is a promise about behaviour.
+
+    An unverified one is worse than none: it reads as authoritative while
+    quietly contradicting the grader. This is the "Most Frequent Word" problem
+    -- prose that says "the word that appears most often" while the examples
+    silently establish tokenisation and case folding.
+    """
+
+    ALL = [Language.PYTHON, Language.JAVASCRIPT, Language.TYPESCRIPT]
+
+    def test_a_question_whose_clarifications_hold_is_accepted(self) -> None:
+        report = validate_question(load("most_frequent_word"), languages=self.ALL)
+        assert report.accepted, report.detail
+
+    def test_a_clarification_the_code_contradicts_is_rejected(self) -> None:
+        report = validate_question(
+            load("most_frequent_word_wrong_clarification"), languages=self.ALL
+        )
+        assert report.outcome is GateOutcome.CLARIFICATION_WRONG
+        assert "capitalisation" in report.detail
+        # The rejection names both sides, so a repair has something to act on.
+        assert "reference returns" in report.detail
+
+    def test_a_probe_the_reference_cannot_run_is_rejected(self) -> None:
+        q = load("most_frequent_word")
+        q.clarifications[0].probe = {"nonexistent_parameter": 1}
+        report = validate_question(q)
+        assert report.outcome is GateOutcome.CLARIFICATION_WRONG
+
+    def test_clarifications_are_optional(self) -> None:
+        """Additive: questions without them still validate."""
+        q = load("most_frequent_word")
+        q.clarifications = []
+        assert validate_question(q, languages=self.ALL).accepted
+
+    def test_the_ambiguities_that_matter_are_covered(self) -> None:
+        """The fixture documents what a good question settles."""
+        asked = " ".join(c.question.lower() for c in load("most_frequent_word").clarifications)
+        for topic in ("capitalisation", "punctuation", "empty", "tie"):
+            assert topic in asked, f"nothing settles {topic}"

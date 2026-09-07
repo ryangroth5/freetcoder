@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 
 from openai import APIError, AsyncOpenAI
@@ -180,6 +180,111 @@ class OpenAICompatibleClient:
                 })
 
         raise LLMError(f"no valid response within a budget of {tool_budget} tool calls")
+
+    async def stream_chat(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        dispatch: Callable[[str, dict[str, Any]], str] | None = None,
+        temperature: float = 0.4,
+        tool_budget: int = 4,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield {"type": "token"|"tool"|"error", ...} as the reply is produced.
+
+        Falls back to a single non-streamed reply when the provider cannot
+        stream, and reports an error event rather than raising if a stream dies
+        part-way -- a chat that arrives late beats one that breaks.
+        """
+        convo: list[dict[str, Any]] = [{"role": "system", "content": system}, *messages]
+
+        for _ in range(tool_budget + 1):
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "temperature": temperature,
+                "messages": convo,
+                "stream": True,
+            }
+            if tools and self.supports_tools is not False:
+                kwargs["tools"] = tools
+
+            text = ""
+            calls: dict[int, dict[str, Any]] = {}
+            try:
+                stream = await self._client.chat.completions.create(**kwargs)
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        text += delta.content
+                        yield {"type": "token", "text": delta.content}
+                    for call in getattr(delta, "tool_calls", None) or []:
+                        entry = calls.setdefault(
+                            call.index, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if call.id:
+                            entry["id"] = call.id
+                        if call.function and call.function.name:
+                            entry["name"] = call.function.name
+                        if call.function and call.function.arguments:
+                            entry["arguments"] += call.function.arguments
+            except APIError as exc:
+                if text:
+                    # Partial reply already delivered: say what went wrong
+                    # rather than leaving it looking finished.
+                    yield {"type": "error", "message": f"the reply was cut short: {exc}"}
+                    return
+                log.info("streaming unavailable (%s); falling back", exc)
+                async for event in self._unstreamed(convo, tools, temperature):
+                    yield event
+                return
+
+            if not calls:
+                return
+
+            convo.append({
+                "role": "assistant",
+                "content": text,
+                "tool_calls": [
+                    {"id": c["id"], "type": "function",
+                     "function": {"name": c["name"], "arguments": c["arguments"]}}
+                    for c in calls.values()
+                ],
+            })
+            for call in calls.values():
+                try:
+                    arguments = json.loads(call["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    arguments = {}
+                result = dispatch(call["name"], arguments) if dispatch else "unavailable"
+                yield {"type": "tool", "name": call["name"], "result": result}
+                convo.append({
+                    "role": "tool", "tool_call_id": call["id"], "content": result,
+                })
+
+        yield {"type": "error", "message": "the tutor ran out of tool calls"}
+
+    async def _unstreamed(
+        self,
+        convo: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        temperature: float,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """One whole reply, for providers that cannot stream."""
+        # Built as a dict for the same reason as _request: the SDK's typed
+        # overloads do not accept the plain message dicts we assemble.
+        kwargs: dict[str, Any] = {
+            "model": self._model, "temperature": temperature, "messages": convo,
+        }
+        try:
+            resp = await self._client.chat.completions.create(**kwargs)
+            content = resp.choices[0].message.content or ""
+            if content:
+                yield {"type": "token", "text": content}
+        except APIError as exc:
+            yield {"type": "error", "message": f"the tutor is unavailable: {exc}"}
 
     async def _request(
         self, system: str, user: str, schema: type[M], temperature: float, mode: str

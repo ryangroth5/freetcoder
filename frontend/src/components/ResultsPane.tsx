@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Question, RunReport } from '../api'
 import { caseErrors, useStore } from '../store'
+import { TutorPane } from './TutorPane'
 import type { EditableCase } from '../store'
 
 const VERDICT_LABEL: Record<string, string> = {
@@ -19,7 +20,7 @@ export function ResultsPane({ question, report, busy }: {
   report: RunReport | null
   busy: boolean
 }) {
-  const [tab, setTab] = useState<'testcase' | 'result'>('testcase')
+  const [tab, setTab] = useState<'testcase' | 'result' | 'tutor'>('testcase')
   const [selected, setSelected] = useState(0)
 
   useEffect(() => {
@@ -39,8 +40,15 @@ export function ResultsPane({ question, report, busy }: {
       <div className="flex gap-1 border-b border-[var(--color-edge)] px-3">
         <Tab active={tab === 'testcase'} onClick={() => setTab('testcase')}>Testcase</Tab>
         <Tab active={tab === 'result'} onClick={() => setTab('result')}>Test Result</Tab>
+        <Tab active={tab === 'tutor'} onClick={() => setTab('tutor')}>Tutor</Tab>
       </div>
 
+      {tab === 'tutor' ? (
+        // Its own scroll container: the conversation manages its own overflow.
+        <div className="min-h-0 flex-1">
+          <TutorPane language={question.language} />
+        </div>
+      ) : (
       <div className="flex-1 overflow-y-auto p-4">
         {tab === 'testcase' && <CaseEditor question={question} />}
 
@@ -178,6 +186,7 @@ export function ResultsPane({ question, report, busy }: {
           )
         )}
       </div>
+      )}
     </div>
   )
 }

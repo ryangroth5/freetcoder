@@ -281,3 +281,75 @@ Runs live in memory — progress is worthless once the request it describes has
 returned. The registry caps the number of runs, evicts finished ones on a TTL,
 and caps steps per run, because an in-memory store that grows forever is a slow
 leak in a container meant to run for days.
+
+---
+
+## The tutor
+
+A chat panel beside the problem that can see what the candidate sees, and no
+more.
+
+### What it knows
+
+- the statement, its structured constraints, and the **verified clarifications**;
+- the candidate's current code and language;
+- their last run in full — verdict, per-case results, the first failing case,
+  and compiler or syntax errors verbatim;
+- the history of earlier attempts, so it can notice a case that started passing
+  or one that broke while fixing another;
+- the visible examples;
+- a **characterisation** of the hidden cases: how many, the range of sizes, and
+  which shapes are present.
+
+### What it never knows
+
+**The reference solution.** A tutor that can read the answer is a back channel
+to the oracle, which is the boundary the Solution tab already enforces.
+
+**The hidden cases verbatim.** This one is subtler and worth stating. Hidden
+*inputs* leak little on their own, since the expected outputs are withheld. But
+a "compute expected" affordance would let someone enumerate the inputs through
+chat, compute each answer, and pass with a lookup table. Neither feature is a
+problem alone; together they are a bypass. The characterisation preserves what
+was actually wanted — reasoning about what valid input looks like — without
+handing over a test vector list.
+
+Both are asserted directly: `test_tutor.py` puts a distinctive marker in the
+reference and a distinctive string in a hidden input, and fails if either
+reaches the assembled context.
+
+The tutor has its own context builder rather than reusing the repair prompt's,
+which *does* see reference solutions. Sharing one would put a leak a single edit
+away.
+
+### Behavioural access, not source access
+
+`probe_reference(args)` runs the intended solution on arguments the candidate is
+asking about and returns **only the output**. "What does it do on an empty
+string?" becomes answerable with certainty while the algorithm stays invisible.
+
+This grants no capability the candidate lacks — they can already run their own
+code against any input — it is a more convenient route to the same information.
+
+### It follows the format
+
+`generation.give_hints` already encodes how much support each platform gives.
+LeetCode and Coderbyte offer hints; a CodeSignal GCA and Codility offer none. The
+tutor follows: locked during those simulations with the reason shown, unlocked on
+submit or skip. A timed assessment that ships an AI assistant is not simulating
+anything.
+
+### Streaming, and its fallbacks
+
+Replies stream over SSE, because a silent ten-second pause reads as broken. Two
+fallbacks, since new transport is where this project has lost the most time:
+
+- a provider that cannot stream gets one whole reply instead;
+- a stream that dies mid-reply surfaces what arrived plus the reason, rather than
+  a blank bubble.
+
+Tool calls are shown as they happen — watching it check rather than guess is the
+most reassuring part of the exchange.
+
+Budgets: `tutor_tool_budget` (probes per reply) and `tutor_message_cap`
+(questions per session).

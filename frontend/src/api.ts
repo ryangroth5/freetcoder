@@ -202,6 +202,24 @@ export interface ProgressRun {
   outcome: string
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface ChatState {
+  available: boolean
+  reason: string
+  messages: ChatMessage[]
+}
+
+/** One event from the tutor's reply stream. */
+export type ChatEvent =
+  | { type: 'token'; text: string }
+  | { type: 'tool'; name: string; result: string }
+  | { type: 'error'; message: string }
+  | { type: 'done' }
+
 export interface PickerSelection {
   style: string
   preset?: string | null
@@ -245,6 +263,59 @@ export const api = {
       `/sessions/${id}/questions/${index}/skip`,
     ),
   results: (id: string) => request<SessionResults>(`/sessions/${id}/results`),
+
+  chatState: (id: string, index: number) =>
+    request<ChatState>(`/sessions/${id}/questions/${index}/chat`),
+
+  /**
+   * Ask the tutor, yielding events as they arrive.
+   *
+   * Read with fetch + ReadableStream rather than EventSource, because the
+   * request is a POST. Falls back to reading the whole body if the stream
+   * breaks mid-reply: a chat that arrives late beats one that vanishes.
+   */
+  async *chat(
+    id: string, index: number, message: string, source: string, language: Language,
+  ): AsyncGenerator<ChatEvent> {
+    const resp = await fetch(`/api/sessions/${id}/questions/${index}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, source, language }),
+    })
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}))
+      throw new ApiError(resp.status, body.detail ?? resp.statusText)
+    }
+    if (!resp.body) {
+      yield { type: 'error', message: 'the tutor sent no reply' }
+      return
+    }
+
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        // SSE frames are separated by a blank line.
+        const frames = buffer.split('\n\n')
+        buffer = frames.pop() ?? ''
+        for (const frame of frames) {
+          const line = frame.split('\n').find((l) => l.startsWith('data: '))
+          if (!line) continue
+          try {
+            yield JSON.parse(line.slice(6)) as ChatEvent
+          } catch {
+            // A truncated frame is not worth failing the whole reply over.
+          }
+        }
+      }
+    } catch (err) {
+      yield { type: 'error', message: `the reply was interrupted: ${String(err)}` }
+    }
+  },
 
   progress: (id: string) => request<ProgressRun>(`/progress/${id}`),
   cancelProgress: (id: string) =>

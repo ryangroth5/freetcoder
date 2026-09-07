@@ -31,7 +31,17 @@ def build_client(settings: Settings | None = None) -> LLMClient:
 
         payload = json.loads((FIXTURE_DIR / "two_sum_good.json").read_text())
         # Cycles: offline mode must not run dry part-way through a session.
-        return FakeLLM([payload], cycle=True)
+        # The canned chat reply keeps the tutor demonstrable without a key.
+        return FakeLLM(
+            [payload],
+            cycle=True,
+            chat_reply=(
+                "Offline mode is on, so this is a canned reply rather than a "
+                "real tutor. Start with what you have already tried, then read "
+                "the first failing case: the input and the expected answer "
+                "usually point straight at the gap."
+            ),
+        )
     if not s.configured:
         return FakeLLM()
     return OpenAICompatibleClient(

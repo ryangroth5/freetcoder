@@ -60,6 +60,16 @@ CREATE TABLE IF NOT EXISTS attempts (
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_session ON attempts(session_id);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id             TEXT PRIMARY KEY,
+    session_id     TEXT NOT NULL,
+    question_index INTEGER NOT NULL,
+    role           TEXT NOT NULL,   -- 'user' | 'assistant'
+    content        TEXT NOT NULL,
+    created_at     REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id, question_index);
 """
 
 
@@ -189,6 +199,37 @@ class Storage:
             "UPDATE sessions SET finished_at = ? WHERE id = ?", (time.time(), sid)
         )
         await self.db.commit()
+
+    # --------------------------------------------------------------- chat
+    async def add_chat_message(
+        self, session_id: str, question_index: int, role: str, content: str
+    ) -> None:
+        await self.db.execute(
+            "INSERT INTO chat_messages (id, session_id, question_index, role,"
+            " content, created_at) VALUES (?,?,?,?,?,?)",
+            (uuid.uuid4().hex, session_id, question_index, role, content, time.time()),
+        )
+        await self.db.commit()
+
+    async def chat_history(
+        self, session_id: str, question_index: int, limit: int = 40
+    ) -> list[dict[str, Any]]:
+        """Most recent messages, oldest first."""
+        cur = await self.db.execute(
+            "SELECT role, content FROM chat_messages WHERE session_id = ?"
+            " AND question_index = ? ORDER BY created_at DESC LIMIT ?",
+            (session_id, question_index, limit),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+        return list(reversed(rows))
+
+    async def chat_message_count(self, session_id: str) -> int:
+        cur = await self.db.execute(
+            "SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ? "
+            "AND role = 'user'",
+            (session_id,),
+        )
+        return int((await cur.fetchone())["n"])  # type: ignore[index]
 
     # ----------------------------------------------------------- attempts
     async def record_attempt(

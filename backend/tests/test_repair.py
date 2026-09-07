@@ -213,7 +213,7 @@ class TestTheGateIsNotRepairable:
         targets = set(TARGET_FOR.values())
         assert targets <= {
             "reference", "scaffold", "generator", "brute_force",
-            "visible_tests", "constraints", "whole",
+            "visible_tests", "constraints", "clarifications", "whole",
         }
 
         # Every target names part of the *question*, never part of the gate.
@@ -230,6 +230,7 @@ class TestTheGateIsNotRepairable:
                 "generator": "hidden_generator_py",
                 "brute_force": "brute_force_py",
                 "visible_tests": "visible_tests",
+                "clarifications": "clarifications",
             }[target]
             assert mapped in question_fields or mapped in signature_fields
 
@@ -264,3 +265,32 @@ class TestPipelineIntegration:
         assert any(a.repaired for a in result.attempts), (
             "the question should have been repaired, not regenerated"
         )
+
+
+class TestRepairingClarifications:
+    async def test_a_contradicting_clarification_is_repaired(self) -> None:
+        """Either the clarification or the code is wrong; the model picks."""
+        from freetcoder.models import Clarification
+
+        q = load("most_frequent_word_wrong_clarification")
+        report = validate_question(q, languages=ALL)
+        assert report.outcome is GateOutcome.CLARIFICATION_WRONG
+
+        corrected = [
+            Clarification(question="Does capitalisation matter?",
+                          answer="No. 'Hello' and 'hello' are the same word.",
+                          probe={"message": "Hello hello"}, expect="hello"),
+        ]
+        client = FakeLLM([QuestionPatch(target="clarifications",
+                                        clarifications=corrected)])
+        repaired, final, _ = await repair_question(client, q, report, languages=ALL)
+
+        assert repaired is not None, final.detail
+        assert final.accepted
+        # Only the clarifications changed.
+        assert repaired.statement_md == q.statement_md
+
+    async def test_a_clarifications_patch_without_entries_is_rejected(self) -> None:
+        with pytest.raises(PatchError):
+            apply_patch(load("most_frequent_word"),
+                        QuestionPatch(target="clarifications"))

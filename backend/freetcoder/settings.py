@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     #: How many times the model may execute code while repairing one question.
     tool_call_budget: int = 6
 
+    #: How many times the tutor may probe the reference in one reply.
+    tutor_tool_budget: int = 4
+    #: Questions per session, so a runaway client cannot spend without bound.
+    tutor_message_cap: int = 60
+
     #: The question library service. Empty disables publishing and browsing;
     #: unreachable degrades the same way. Practice never depends on it.
     library_url: str = ""

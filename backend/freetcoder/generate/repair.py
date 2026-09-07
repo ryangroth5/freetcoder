@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from ..llm import LLMClient, LLMError
 from ..models import (
+    Clarification,
     GateOutcome,
     GateReport,
     GeneratedQuestion,
@@ -35,7 +36,7 @@ log = logging.getLogger(__name__)
 
 RepairTarget = Literal[
     "reference", "scaffold", "generator", "brute_force", "visible_tests",
-    "constraints", "whole",
+    "constraints", "clarifications", "whole",
 ]
 
 #: Which artifact each rejection implicates. `VISIBLE_MISMATCH` is the one
@@ -47,6 +48,7 @@ TARGET_FOR: dict[GateOutcome, RepairTarget] = {
     GateOutcome.GENERATOR_FAILED: "generator",
     GateOutcome.NO_HIDDEN_CASES: "generator",
     GateOutcome.CONSTRAINT_VIOLATION: "constraints",
+    GateOutcome.CLARIFICATION_WRONG: "clarifications",
     GateOutcome.UNSAFE_MAGNITUDE: "generator",
     GateOutcome.BRUTE_FORCE_DISAGREES: "brute_force",
     GateOutcome.MISSING_BRUTE_FORCE: "brute_force",
@@ -71,6 +73,9 @@ class QuestionPatch(BaseModel):
     )
     visible_tests: list[TestCase] | None = Field(
         default=None, description="Replacement examples when target is 'visible_tests'"
+    )
+    clarifications: list[Clarification] | None = Field(
+        default=None, description="Replacement clarifications"
     )
     constraints_md: str | None = None
     reasoning: str = Field(default="", description="One sentence: what was wrong")
@@ -107,6 +112,11 @@ def apply_patch(q: GeneratedQuestion, patch: QuestionPatch) -> GeneratedQuestion
             raise PatchError("a visible-tests patch needs replacement cases")
         updated.visible_tests = patch.visible_tests
 
+    elif patch.target == "clarifications":
+        if patch.clarifications is None:
+            raise PatchError("a clarifications patch needs replacement entries")
+        updated.clarifications = patch.clarifications
+
     elif patch.target == "constraints":
         # Either side of the disagreement may be the wrong one, so a constraints
         # patch may rewrite the bounds, the generator, or both.
@@ -138,6 +148,10 @@ def _artifact_text(q: GeneratedQuestion, target: RepairTarget, language: Languag
     if target == "visible_tests":
         return json.dumps(
             [t.model_dump(mode="json") for t in q.visible_tests], indent=2
+        )
+    if target == "clarifications":
+        return json.dumps(
+            [c.model_dump(mode="json") for c in q.clarifications], indent=2
         )
     if target == "constraints":
         return (
@@ -209,6 +223,7 @@ _TARGET_LABEL: dict[str, str] = {
     "brute_force": "naive solution used to check the tests bite",
     "visible_tests": "worked examples",
     "constraints": "stated constraints",
+    "clarifications": "clarifications",
 }
 
 

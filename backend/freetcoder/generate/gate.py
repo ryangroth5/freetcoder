@@ -403,6 +403,51 @@ def _check_scaffolds(
     return None
 
 
+def _check_clarifications(
+    q: GeneratedQuestion, sig: Signature
+) -> GateReport | None:
+    """Every clarification must match what the reference actually does.
+
+    A clarification is a promise about behaviour. An unverified one is worse
+    than none: it reads as authoritative while quietly contradicting the grader.
+    """
+    if not q.clarifications:
+        return None
+
+    probes = [TestCase(args=c.probe, expected=c.expect) for c in q.clarifications]
+    verdict, results, stderr = _run_cases(
+        sig.reference_solution, sig.function_name, probes, REFERENCE_LIMITS
+    )
+    if verdict is not Verdict.OK or len(results) != len(probes):
+        return GateReport(
+            outcome=GateOutcome.CLARIFICATION_WRONG,
+            detail=(
+                "the reference could not run the clarification probes: "
+                f"{_failure_detail(verdict, results, stderr)}"
+            ),
+        )
+
+    for clarification, res in zip(q.clarifications, results, strict=True):
+        if not res.ok:
+            return GateReport(
+                outcome=GateOutcome.CLARIFICATION_WRONG,
+                detail=(
+                    f"the reference raised on the probe for "
+                    f"{clarification.question!r}: {res.error[:200]}"
+                ),
+            )
+        if not values_equal(clarification.expect, res.value):
+            return GateReport(
+                outcome=GateOutcome.CLARIFICATION_WRONG,
+                detail=(
+                    f"{clarification.question!r} claims {clarification.expect!r} "
+                    f"for {clarification.probe!r}, but the reference returns "
+                    f"{res.value!r}. The clarification and the solution must agree."
+                ),
+            )
+    return None
+
+
 def _check_magnitudes(
     cases: list[TestCase], languages: Sequence[Language]
 ) -> GateReport | None:
@@ -460,6 +505,11 @@ def validate_question(
     report_to("running the reference against the examples in the statement")
     if (report := _check_reference_on_visible(q, sig)) is not None:
         return report
+
+    if q.clarifications:
+        report_to(f"checking {len(q.clarifications)} clarifications against the solution")
+        if (report := _check_clarifications(q, sig)) is not None:
+            return report
 
     report_to("generating hidden test cases")
     cases, report = _materialise_hidden_cases(q)

@@ -375,3 +375,36 @@ test.describe('editor file backing', () => {
     await expect(page.getByText('Compile Error')).toBeVisible({ timeout: 90_000 })
   })
 })
+
+test.describe('tutor', () => {
+  test('is offered as a third tab', async ({ page }) => {
+    await startLeetCodeSession(page)
+    await page.getByRole('button', { name: 'Tutor' }).click()
+    await expect(page.getByLabel('Ask the tutor')).toBeVisible()
+    // It says up front what it can and cannot see.
+    await expect(page.getByText(/cannot show you the solution/)).toBeVisible()
+  })
+
+  test('Ask is disabled until there is something to ask', async ({ page }) => {
+    await startLeetCodeSession(page)
+    await page.getByRole('button', { name: 'Tutor' }).click()
+    await expect(page.getByRole('button', { name: 'Ask' })).toBeDisabled()
+    await page.getByLabel('Ask the tutor').fill('How should I start?')
+    await expect(page.getByRole('button', { name: 'Ask' })).toBeEnabled()
+  })
+
+  test('a reply appears', async ({ page }) => {
+    await startLeetCodeSession(page)
+    await page.getByRole('button', { name: 'Tutor' }).click()
+    await page.getByLabel('Ask the tutor').fill('How should I start?')
+    await page.getByRole('button', { name: 'Ask' }).click()
+
+    // Assert on structure, not wording: the reply text depends on the model.
+    await expect(page.locator('[data-role="user"]')).toHaveCount(1)
+    await expect(page.locator('[data-role="assistant"]').first())
+      .toBeVisible({ timeout: 60_000 })
+    // Whatever it said, it is not empty.
+    const reply = await page.locator('[data-role="assistant"]').first().innerText()
+    expect(reply.trim().length).toBeGreaterThan(10)
+  })
+})

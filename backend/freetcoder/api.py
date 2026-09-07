@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .formats import (
@@ -33,6 +35,13 @@ from .service import (
 )
 from .settings import get_settings
 from .storage import Storage
+from .tutor import (
+    SYSTEM_PROMPT,
+    build_context,
+    is_available,
+    probe_reference,
+    probe_tool_schema,
+)
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +99,19 @@ class CaseInput(BaseModel):
 #: Every case is executed, so an unbounded list is a way to tie up the runner.
 #: Well above anything a person edits by hand.
 MAX_CASES = 50
+
+
+class ChatRequest(BaseModel):
+    """One message to the tutor.
+
+    Deliberately carries only the message and the editor state. Everything the
+    tutor knows about the question is assembled server-side, so a request cannot
+    name a different question or inject its own instructions.
+    """
+
+    message: str = Field(min_length=1, max_length=4000)
+    source: str = ""
+    language: Language = Language.PYTHON
 
 
 class RunRequest(BaseModel):
@@ -405,6 +427,99 @@ async def skip(request: Request, sid: str, index: int) -> dict[str, Any]:
         source="", kind="skip", verdict="skipped", score=0.0,
     )
     return {"skipped": True, "reference_solution": _reference(gated)}
+
+
+# ------------------------------------------------------------------- tutor
+@router.get("/sessions/{sid}/questions/{index}/chat")
+async def chat_state(request: Request, sid: str, index: int) -> dict[str, Any]:
+    """Whether the tutor is available here, and what has been said so far."""
+    store = request.app.state.store
+    session, _ = await _load(store, sid, index)
+    attempts = await store.attempts_for(sid, index)
+    attempted = any(a["kind"] in ("submit", "skip") for a in attempts)
+
+    available, reason = is_available(session["config"], attempted=attempted)
+    return {
+        "available": available,
+        "reason": reason,
+        "messages": await store.chat_history(sid, index),
+    }
+
+
+@router.post("/sessions/{sid}/questions/{index}/chat")
+async def chat(
+    request: Request, sid: str, index: int, payload: ChatRequest
+) -> StreamingResponse:
+    """Ask the tutor. Replies stream, because a silent pause reads as broken."""
+    store = request.app.state.store
+    session, gated = await _load(store, sid, index)
+    settings = get_settings()
+
+    attempts = await store.attempts_for(sid, index)
+    attempted = any(a["kind"] in ("submit", "skip") for a in attempts)
+    available, reason = is_available(session["config"], attempted=attempted)
+    if not available:
+        raise HTTPException(409, reason)
+
+    if await store.chat_message_count(sid) >= settings.tutor_message_cap:
+        raise HTTPException(429, "This session has reached its tutor message limit.")
+
+    last_report = _last_report(attempts)
+    context = build_context(
+        gated, session["config"],
+        source=payload.source, language=payload.language,
+        last_report=last_report, attempts=attempts,
+    )
+    history = await store.chat_history(sid, index)
+    await store.add_chat_message(sid, index, "user", payload.message)
+
+    messages = [
+        {"role": "user", "content": f"{context}\n\n---\n\nThey ask: {payload.message}"}
+        if not history else {"role": "user", "content": payload.message}
+    ]
+    if history:
+        messages = [
+            {"role": "user", "content": context},
+            *[{"role": m["role"], "content": m["content"]} for m in history],
+            {"role": "user", "content": payload.message},
+        ]
+
+    client = request.app.state.get_llm()
+
+    async def events() -> AsyncIterator[str]:
+        reply: list[str] = []
+        try:
+            async for event in client.stream_chat(
+                system=SYSTEM_PROMPT,
+                messages=messages,
+                tools=[probe_tool_schema()],
+                dispatch=lambda name, args: (
+                    probe_reference(gated, args.get("args", {}))
+                    if name == "probe_reference" else f"unknown tool {name!r}"
+                ),
+                tool_budget=settings.tutor_tool_budget,
+            ):
+                if event.get("type") == "token":
+                    reply.append(str(event.get("text", "")))
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:  # noqa: BLE001 - a broken stream must not 500
+            log.exception("tutor stream failed for %s", sid)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:200]})}\n\n"
+        finally:
+            if reply:
+                await store.add_chat_message(sid, index, "assistant", "".join(reply))
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+def _last_report(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The most recent run or submit, as the tutor should see it."""
+    for attempt in reversed(attempts):
+        if attempt["kind"] in ("run", "submit"):
+            return {"verdict": attempt["verdict"], "stderr": attempt.get("detail") or "",
+                    "cases": [], "first_failure": None}
+    return None
 
 
 # ---------------------------------------------------------------- progress

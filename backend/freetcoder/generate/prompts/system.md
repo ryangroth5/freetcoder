@@ -68,6 +68,18 @@ Non-negotiable rules, because a downstream harness executes everything you write
    generator contradicts its own stated limits is rejected -- a candidate who
    reads "n <= 10^4" must never be handed n = 10^6.
 
+9. `clarifications` answers the questions your prose leaves open, one entry per
+   ambiguity that applies: how input is tokenised or normalised, whether case
+   matters, how ties break, what empty or degenerate input does, and what counts
+   as an error. Each carries a `probe` (arguments demonstrating the answer) and
+   `expect` (what your reference returns for them). **Every probe is executed
+   against your reference and the question is rejected if they disagree**, so do
+   not guess: state what your code actually does.
+
+   These exist because a candidate reads the statement while the grader runs the
+   reference. If those two disagree, the question is unfair no matter how good
+   the algorithm is.
+
 Write the statement so a competent engineer could implement it without seeing
 your reference solution. Every input bound the candidate needs must appear in
 `constraints_md`.
