@@ -446,3 +446,46 @@ never sit on the path that makes the editor usable.
 
 Not attempted: shipping the real `monaco-editor` package for its grammars. Two
 copies of the Monaco API is the trap that produced a blank page in Phase C.
+
+---
+
+# Phase I findings (models need files behind them)
+
+Switching to TypeScript surfaced:
+
+> Unable to read file '/workspace/solution.ts'
+> (Error: Unable to resolve nonexistent file '/workspace/solution.ts')
+
+## `monaco.editor.createModel` makes a model with no file
+monaco-vscode-api runs a real VSCode file service. `createModel` registers a
+model but no *file*, so everything works until something resolves that URI --
+the language client opening the document, or the editor service creating a model
+reference -- and then the file service throws.
+
+The wrapper's own model is built with `createModelReference(uri, code)` from
+`@codingame/monaco-vscode-api/monaco`, which creates both. Per-language models
+now use the same call. References are held and disposed; dropping a reference
+while keeping the model leaves the file service holding a phantom entry.
+
+## Making the swap asynchronous widened an existing race
+`createModelReference` is async, and two ordering bugs followed:
+
+- **A stale swap could win.** python → ts → js → python could leave an earlier
+  language's model attached. A `desired` ref records the language most recently
+  asked for, and a resolution is discarded unless it still matches.
+- **The value effect wrote into the wrong buffer.** The store's `value` changes
+  the moment the language does, but the model swap completes later -- so the
+  incoming language's scaffold was written into the *outgoing* language's model.
+  The visible symptom was TypeScript appearing inside `solution.py` after
+  round-tripping the language selector. An `attached` ref records which
+  language's model is actually in the editor, and the effect writes only when it
+  matches.
+
+Both were invisible while model creation was synchronous. Asynchrony did not
+introduce the confusion between "the language the user picked" and "the buffer
+currently on screen" -- it just made it observable.
+
+## Cancellation is normal here, not exceptional
+A superseded `createModelReference` rejects with `Canceled`. Unhandled, it
+surfaces as a page error. Superseded opens are expected, so they are swallowed
+by name and anything else is logged.

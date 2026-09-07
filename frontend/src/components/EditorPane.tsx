@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { MonacoEditorReactComp } from '@typefox/monaco-editor-react'
 import type { WrapperConfig } from 'monaco-editor-wrapper'
 import { LogLevel } from '@codingame/monaco-vscode-api'
+// The same call the wrapper uses for its own model. It registers a *file* as
+// well as a model; monaco.editor.createModel does not, which is why a
+// hand-made model produced "Unable to resolve nonexistent file".
+import { createModelReference } from '@codingame/monaco-vscode-api/monaco'
 import * as monaco from 'monaco-editor'
 // TextMate grammars. The wrapper runs in 'extended' mode, which enables the
 // VSCode TextMate tokenizer and *not* Monarch -- so setMonarchTokensProvider is
@@ -69,6 +73,13 @@ function websocketUrl(endpoint: string): string {
   return `${protocol}://${location.host}/lsp/${endpoint}`
 }
 
+/** Cancellation is how a superseded async open reports itself. */
+function isCancellation(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name
+  const message = (err as { message?: string } | null)?.message ?? ''
+  return name === 'Canceled' || name === 'CodeExpectedError' || message === 'Canceled'
+}
+
 function modelUri(language: Language): monaco.Uri {
   return monaco.Uri.parse(`file:///workspace/${FILE_NAME[language]}`)
 }
@@ -106,6 +117,19 @@ export function EditorPane({
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const models = useRef(new Map<Language, monaco.editor.ITextModel>())
+  //: Model *references* must be held and disposed. Dropping the reference while
+  //: keeping the model is what leaves the file service holding a phantom entry.
+  const refs = useRef<{ dispose: () => void }[]>([])
+  const pending = useRef(new Map<Language, Promise<monaco.editor.ITextModel>>())
+  //: The language most recently asked for. Model creation is asynchronous, so a
+  //: switch that resolves late must not overwrite a newer one -- swapping
+  //: python -> ts -> js -> python left TypeScript on screen.
+  const desired = useRef<Language>(language)
+  //: Which language's model is actually attached to the editor right now.
+  //: `value` changes as soon as the language does, but the model swap is
+  //: asynchronous -- so without this the value effect writes the incoming
+  //: language's scaffold into the *outgoing* language's buffer.
+  const attached = useRef<Language>(language)
   const subs = useRef<monaco.IDisposable[]>([])
   const seed = useRef({ language, value })
   //: What the editor itself last produced. Without this, every keystroke looks
@@ -202,42 +226,89 @@ export function EditorPane({
     )
   }
 
-  /** Model for `lang`, created on first use. */
-  function modelFor(lang: Language, text: string): monaco.editor.ITextModel {
+  /**
+   * Model for `lang`, created on first use.
+   *
+   * Uses createModelReference rather than monaco.editor.createModel because the
+   * latter creates a model with no file behind it. Everything works until
+   * something resolves that URI -- the language client opening the document, or
+   * the editor service -- at which point the file service throws "Unable to
+   * resolve nonexistent file '/workspace/solution.ts'". This is exactly how the
+   * wrapper builds its own initial model.
+   */
+  async function modelFor(
+    lang: Language, text: string,
+  ): Promise<monaco.editor.ITextModel> {
     const existing = models.current.get(lang)
     if (existing && !existing.isDisposed()) {
       watch(existing)
       return existing
     }
 
-    const uri = modelUri(lang)
-    const found = monaco.editor.getModel(uri)
-    const model = found ?? monaco.editor.createModel(text, LSP_LANGUAGE_ID[lang], uri)
-    if (model.getLanguageId() !== LSP_LANGUAGE_ID[lang]) {
-      monaco.editor.setModelLanguage(model, LSP_LANGUAGE_ID[lang])
-    }
-    watch(model)
-    models.current.set(lang, model)
-    return model
+    // A language switched to twice in quick succession must not race itself
+    // into two references for one URI.
+    const inFlight = pending.current.get(lang)
+    if (inFlight) return inFlight
+
+    const create = (async () => {
+      try {
+        const ref = await createModelReference(modelUri(lang), text)
+        refs.current.push(ref)
+        const model = ref.object.textEditorModel
+        if (model === null) throw new Error(`no model for ${lang}`)
+        if (model.getLanguageId() !== LSP_LANGUAGE_ID[lang]) {
+          ref.object.setLanguageId(LSP_LANGUAGE_ID[lang])
+        }
+        watch(model)
+        models.current.set(lang, model)
+        return model
+      } finally {
+        // Always clear, or a failed open would wedge this language forever.
+        pending.current.delete(lang)
+      }
+    })()
+
+    pending.current.set(lang, create)
+    return create
   }
 
   // Swap models when the language changes, or as soon as the editor exists.
   useEffect(() => {
     const editor = editorRef.current
     if (!editor || !ready) return
-    const model = modelFor(language, value)
-    if (editor.getModel() === model) return
+    let cancelled = false
+    desired.current = language
 
-    editor.setModel(model)
+    void (async () => {
+      let model: monaco.editor.ITextModel
+      try {
+        model = await modelFor(language, value)
+      } catch (err) {
+        // A superseded switch rejects with a Cancellation, which is expected
+        // rather than exceptional; anything else is worth seeing.
+        if (!isCancellation(err)) console.warn('could not open the editor buffer:', err)
+        return
+      }
+
+      // Guard against a stale resolution: only the language still being asked
+      // for may take the editor.
+      if (cancelled || desired.current !== language) return
+      if (editorRef.current !== editor) return
+      if (editor.getModel() === model) return
+
+      editor.setModel(model)
     // Each language's model *is* its buffer, and it keeps whatever was typed.
     // Only a brand-new model needs seeding from the scaffold; pushing the
     // store's value in here would clobber retained work whenever the store had
     // not yet caught up with the last keystroke.
-    if (model.getValue() === '') model.setValue(value)
-    const text = model.getValue()
-    echoed.current = text
-    latest.current(text)
-    editor.focus()
+      if (model.getValue() === '') model.setValue(value)
+      const text = model.getValue()
+      echoed.current = text
+      latest.current(text)
+      editor.focus()
+    })()
+
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [language, ready])
 
@@ -245,6 +316,11 @@ export function EditorPane({
   // making the editor a controlled component.
   useEffect(() => {
     if (value === echoed.current) return
+    // Only write into the buffer this value belongs to. During a language
+    // switch the value is already the new language's while the old model is
+    // still attached, and writing then corrupts the outgoing buffer -- which
+    // showed up as TypeScript appearing in the Python file.
+    if (attached.current !== language) return
     const editor = editorRef.current
     const model = editor?.getModel()
     if (!model || model.getValue() === value) {
@@ -257,11 +333,14 @@ export function EditorPane({
     if (editor?.hasTextFocus()) return
     echoed.current = value
     model.setValue(value)
-  }, [value])
+  }, [value, language])
 
   useEffect(() => () => {
     subs.current.forEach((s) => s.dispose())
     subs.current = []
+    // Releasing the references is what lets the file service drop the files.
+    refs.current.forEach((ref) => ref.dispose())
+    refs.current = []
     onReader?.(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -283,10 +362,26 @@ export function EditorPane({
           if (!editor) return
           editorRef.current = editor
           const initial = editor.getModel()
-          if (initial) models.current.set(seed.current.language, initial)
+          // The wrapper built this one through the file service already.
+          if (initial) {
+            models.current.set(seed.current.language, initial)
+            attached.current = seed.current.language
+            watch(initial)
+          }
           // Attach to the language we are actually showing.
-          const model = modelFor(language, value)
-          if (editor.getModel() !== model) editor.setModel(model)
+          void modelFor(language, value)
+            .then((model) => {
+              if (desired.current !== language) return
+              if (editorRef.current === editor && editor.getModel() !== model) {
+                editor.setModel(model)
+                attached.current = language
+              }
+            })
+            .catch((err) => {
+              if (!isCancellation(err)) {
+                console.warn('could not open the editor buffer:', err)
+              }
+            })
           editor.onDidChangeCursorPosition((e) =>
             onCursor(e.position.lineNumber, e.position.column))
           onReader?.(() => editor.getModel()?.getValue() ?? '')

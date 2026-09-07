@@ -338,3 +338,40 @@ test.describe('fixes from use', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme', after!)
   })
 })
+
+test.describe('editor file backing', () => {
+  test('switching language raises no unhandled error', async ({ page }) => {
+    // Regression: models were created with monaco.editor.createModel, which
+    // makes a model with no file behind it. Resolving that URI then threw
+    // "Unable to resolve nonexistent file '/workspace/solution.ts'".
+    const errors: string[] = []
+    page.on('pageerror', (e) => errors.push(e.message))
+    page.on('console', (m) => {
+      if (m.type() === 'error' && /nonexistent file|Unable to read file/.test(m.text())) {
+        errors.push(m.text())
+      }
+    })
+
+    await startLeetCodeSession(page)
+    await switchLanguage(page, 'typescript')
+    await switchLanguage(page, 'javascript')
+    await switchLanguage(page, 'python')
+    await page.waitForTimeout(2500)
+
+    const relevant = errors.filter((e) => /nonexistent file|Unable to read file/.test(e))
+    expect(relevant, `file-resolution errors:\n${relevant.join('\n')}`).toHaveLength(0)
+  })
+
+  test('a switched-to language still runs the right code', async ({ page }) => {
+    // The file must back the model well enough to execute, not merely exist.
+    await startLeetCodeSession(page)
+    await switchLanguage(page, 'typescript')
+    await typeSolution(
+      page,
+      'export function two_sum(nums: number[], target: number): number[] ' +
+      '{ return "nope"; }',
+    )
+    await page.getByRole('button', { name: '\u25b6 Run' }).click()
+    await expect(page.getByText('Compile Error')).toBeVisible({ timeout: 90_000 })
+  })
+})
