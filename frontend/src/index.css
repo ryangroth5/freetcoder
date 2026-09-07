@@ -12,6 +12,20 @@
   --color-warn: #d29922;
 }
 
+/* Every component already reads these variables, so a light palette needs no
+   component changes. `data-theme` is set on <html> by theme.ts. */
+[data-theme='light'] {
+  --color-surface: #ffffff;
+  --color-panel: #f3f3f3;
+  --color-edge: #d4d4d4;
+  --color-ink: #1f1f1f;
+  --color-muted: #6b6b6b;
+  --color-accent: #0066b8;
+  --color-pass: #14803c;
+  --color-fail: #cd3131;
+  --color-warn: #9a6700;
+}
+
 html, body, #root { height: 100%; margin: 0; }
 body {
   background: var(--color-surface);

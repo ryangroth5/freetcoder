@@ -212,16 +212,26 @@ class TestTheGateIsNotRepairable:
         """
         targets = set(TARGET_FOR.values())
         assert targets <= {
-            "reference", "generator", "brute_force", "visible_tests",
-            "constraints", "whole",
+            "reference", "scaffold", "generator", "brute_force",
+            "visible_tests", "constraints", "whole",
         }
-        # Every target names a field of the *question*, not of the gate.
+
+        # Every target names part of the *question*, never part of the gate.
+        # `reference` and `scaffold` live on a Signature; the rest are fields of
+        # the question itself.
+        from freetcoder.models import Signature
+
+        signature_fields = set(Signature.model_fields)
         question_fields = set(GeneratedQuestion.model_fields)
-        for target in targets - {"whole", "reference", "constraints"}:
-            mapped = {"generator": "hidden_generator_py",
-                      "brute_force": "brute_force_py",
-                      "visible_tests": "visible_tests"}[target]
-            assert mapped in question_fields
+        for target in targets - {"whole", "constraints"}:
+            mapped = {
+                "reference": "reference_solution",
+                "scaffold": "scaffold",
+                "generator": "hidden_generator_py",
+                "brute_force": "brute_force_py",
+                "visible_tests": "visible_tests",
+            }[target]
+            assert mapped in question_fields or mapped in signature_fields
 
     async def test_a_patch_cannot_alter_gate_behaviour(self) -> None:
         """A repaired question is re-judged by the same unmodified gate."""

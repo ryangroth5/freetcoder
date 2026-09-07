@@ -14,6 +14,17 @@ export default defineConfig({
       '/lsp': { target: 'ws://dev:8080', ws: true },
     },
   },
+  optimizeDeps: {
+    // These carry large TextMate grammars. Prebundling them is what OOM'd
+    // esbuild on this VM ("The service is no longer running: write EPIPE",
+    // then a blank page); excluding them skips that step entirely.
+    exclude: [
+      '@codingame/monaco-vscode-python-default-extension',
+      '@codingame/monaco-vscode-javascript-default-extension',
+      '@codingame/monaco-vscode-typescript-basics-default-extension',
+      '@codingame/monaco-vscode-theme-defaults-default-extension',
+    ],
+  },
   // monaco-vscode-api code-splits its workers, which rollup refuses to emit as
   // IIFE (Vite's default). ES workers are required, not a preference.
   worker: { format: 'es' },

@@ -36,7 +36,11 @@ Non-negotiable rules, because a downstream harness executes everything you write
    }
    ```
 2. `scaffold` must define the same function with the same parameters and an
-   empty body. It is what the candidate sees first.
+   unimplemented body. It is what the candidate sees first, so it must be
+   written **in the language of its own signature** and follow the same module
+   convention as rule 1 -- a JavaScript scaffold needs `module.exports`, a
+   TypeScript one needs `export` and typed parameters. A scaffold written in the
+   wrong language is checked for and rejected.
 3. `visible_tests` are the examples shown in the statement. Their `expected`
    values must be what `reference_solution` actually returns -- these are
    checked by execution, and a mismatch discards the whole question.

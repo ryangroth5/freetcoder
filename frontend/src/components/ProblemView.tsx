@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { useStore } from '../store'
+import { useTheme } from '../theme'
 import { EditorPane } from './EditorPane'
 import { ResultsPane } from './ResultsPane'
 import { StatementPane } from './StatementPane'
@@ -9,10 +10,12 @@ import { Timer } from './Timer'
 export function ProblemView() {
   const {
     session, question, index, source, language, report, referenceSolution,
-    busy, error, setSource, setLanguage, setReadEditor, run, submit, skip, next,
+    busy, error, setSource, setLanguage, setReadEditor, run, submit, skip,
     loadQuestion, clearError, casesAreValid, publish, notice, clearNotice,
+    nextQuestion,
   } = useStore()
   const [cursor, setCursor] = useState({ line: 1, column: 1 })
+  const { resolved, toggle } = useTheme()
 
   if (!session || !question) {
     return <div className="p-8 text-[var(--color-muted)]">Loading question…</div>
@@ -29,17 +32,28 @@ export function ProblemView() {
         <span className="font-semibold">freetcoder</span>
         <span className="text-xs text-[var(--color-muted)]">{session.summary}</span>
 
-        {multi && (
-          <div className="ml-2 flex items-center gap-1">
-            <IconButton disabled={!allowRevisit || index === 0}
-                        onClick={() => loadQuestion(index - 1)} title="Previous">‹</IconButton>
-            <span className="text-xs text-[var(--color-muted)]">
-              {index + 1} / {session.question_count}
-            </span>
-            <IconButton disabled={index + 1 >= session.question_count}
-                        onClick={() => next()} title="Next">›</IconButton>
-          </div>
-        )}
+        <div className="ml-2 flex items-center gap-1">
+          {multi && (
+            <>
+              <IconButton disabled={!allowRevisit || index === 0}
+                          onClick={() => loadQuestion(index - 1)} title="Previous">
+                ‹
+              </IconButton>
+              <span className="text-xs text-[var(--color-muted)]">
+                {index + 1} / {session.question_count}
+              </span>
+            </>
+          )}
+          <IconButton
+            disabled={busy}
+            onClick={() => nextQuestion()}
+            title={multi && index + 1 < session.question_count
+              ? 'Next question'
+              : 'Generate another question in this format'}
+          >
+            {busy ? '…' : '›'}
+          </IconButton>
+        </div>
 
         <div className="ml-auto flex items-center gap-2">
           <Timer />
@@ -57,6 +71,15 @@ export function ProblemView() {
                   className="rounded bg-[var(--color-pass)] px-3 py-1 text-sm font-medium
                              text-white disabled:opacity-40">
             Submit
+          </button>
+          <button
+            onClick={toggle}
+            aria-label="Toggle theme"
+            title={`Switch to ${resolved === 'dark' ? 'light' : 'dark'} mode`}
+            className="rounded border border-[var(--color-edge)] px-2 py-1 text-sm
+                       text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+          >
+            {resolved === 'dark' ? '☀' : '☾'}
           </button>
           <button
             onClick={publish}
@@ -139,6 +162,7 @@ export function ProblemView() {
                     onChange={setSource}
                     onCursor={(line, column) => setCursor({ line, column })}
                     onReader={setReadEditor}
+                    theme={resolved}
                   />
                 </div>
                 <div className="flex justify-end gap-4 border-t border-[var(--color-edge)]

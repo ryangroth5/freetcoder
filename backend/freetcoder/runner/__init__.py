@@ -4,6 +4,7 @@ from .adapters import (
     ADAPTERS,
     LanguageAdapter,
     UnsupportedLanguageError,
+    check_syntax,
     get_adapter,
     run_source,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "UnsupportedLanguageError",
     "Verdict",
     "Workspace",
+    "check_syntax",
     "execute",
     "get_adapter",
     "run_python",

@@ -24,7 +24,7 @@ from ..models import (
     Signature,
     TestCase,
 )
-from ..runner import Limits, Verdict, get_adapter, run_python, run_source
+from ..runner import Limits, Verdict, check_syntax, get_adapter, run_python, run_source
 from .harness import (
     CaseResult,
     decode_results,
@@ -373,6 +373,35 @@ def _check_constraints(
     return None
 
 
+def _check_scaffolds(
+    q: GeneratedQuestion, languages: Sequence[Language]
+) -> GateReport | None:
+    """Each scaffold must be written in the language it claims.
+
+    The gate has always executed reference solutions but never looked at the
+    starter code, and the prompt only asked for "the same function with an empty
+    body" -- not that it be written in that language. So a Python-shaped
+    JavaScript scaffold passed validation and reached the editor, which is what
+    a candidate switching language actually sees.
+
+    Checked for syntax only: a scaffold with an unimplemented body is valid
+    starter code even though it need not satisfy its own declared return type.
+    """
+    for lang in languages:
+        sig = q.signature_for(lang)
+        if sig is None or not sig.scaffold.strip():
+            continue
+        result = check_syntax(lang, sig.scaffold)
+        if result.verdict is not Verdict.OK:
+            lines = result.stderr.strip().splitlines()
+            why = lines[-1][:200] if lines else "does not parse"
+            return GateReport(
+                outcome=GateOutcome.SCAFFOLD_INVALID,
+                detail=f"the {lang.value} scaffold is not valid {lang.value}: {why}",
+            )
+    return None
+
+
 def _check_magnitudes(
     cases: list[TestCase], languages: Sequence[Language]
 ) -> GateReport | None:
@@ -411,6 +440,10 @@ def validate_question(
             detail=f"no signature for {language.value}",
         )
 
+    offered_languages = list(languages or [language])
+    if (report := _check_scaffolds(q, offered_languages)) is not None:
+        return report
+
     if (report := _check_constraints(q, list(q.visible_tests), "visible")) is not None:
         return report
 
@@ -428,7 +461,7 @@ def validate_question(
     if (report := _check_constraints(q, hidden, "hidden")) is not None:
         return report
 
-    offered = list(languages or [language])
+    offered = offered_languages
     if (report := _check_magnitudes(hidden + list(q.visible_tests), offered)) is not None:
         return report
 

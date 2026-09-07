@@ -133,6 +133,7 @@ class GateOutcome(enum.StrEnum):
     CONSTRAINT_VIOLATION = "constraint_violation"
     UNSAFE_MAGNITUDE = "unsafe_magnitude"
     MISSING_BRUTE_FORCE = "missing_brute_force"
+    SCAFFOLD_INVALID = "scaffold_invalid"
     BRUTE_FORCE_DISAGREES = "brute_force_disagrees"
     PERF_NOT_DISCRIMINATING = "perf_not_discriminating"
 

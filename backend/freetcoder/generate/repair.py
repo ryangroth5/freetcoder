@@ -33,7 +33,8 @@ from .tools import TOOL_SCHEMAS, dispatch
 log = logging.getLogger(__name__)
 
 RepairTarget = Literal[
-    "reference", "generator", "brute_force", "visible_tests", "constraints", "whole"
+    "reference", "scaffold", "generator", "brute_force", "visible_tests",
+    "constraints", "whole",
 ]
 
 #: Which artifact each rejection implicates. `VISIBLE_MISMATCH` is the one
@@ -41,6 +42,7 @@ RepairTarget = Literal[
 #: -- so the model is shown both and chooses.
 TARGET_FOR: dict[GateOutcome, RepairTarget] = {
     GateOutcome.REFERENCE_FAILED: "reference",
+    GateOutcome.SCAFFOLD_INVALID: "scaffold",
     GateOutcome.GENERATOR_FAILED: "generator",
     GateOutcome.NO_HIDDEN_CASES: "generator",
     GateOutcome.CONSTRAINT_VIOLATION: "constraints",
@@ -62,7 +64,9 @@ class QuestionPatch(BaseModel):
     )
     content: str | None = Field(
         default=None,
-        description="Replacement source for reference / generator / brute_force",
+        description=(
+            "Replacement source for reference / scaffold / generator / brute_force"
+        ),
     )
     visible_tests: list[TestCase] | None = Field(
         default=None, description="Replacement examples when target is 'visible_tests'"
@@ -123,6 +127,9 @@ def _artifact_text(q: GeneratedQuestion, target: RepairTarget, language: Languag
     if target == "reference":
         sig = q.signature_for(language)
         return sig.reference_solution if sig else "(missing)"
+    if target == "scaffold":
+        sig = q.signature_for(language)
+        return sig.scaffold if sig else "(missing)"
     if target == "generator":
         return q.hidden_generator_py
     if target == "brute_force":
@@ -187,15 +194,18 @@ def build_repair_prompt(
         )
     parts.append(
         f"\nReturn a patch with target `{target}`"
-        + (f" and language `{language.value}`." if target == "reference" else ".")
+        + (f" and language `{language.value}`."
+           if target in ("reference", "scaffold") else ".")
     )
     return "\n".join(parts)
 
 
 def _language_at_fault(report: GateReport, default: Language) -> Language:
-    """Which language's reference the gate complained about."""
+    """Which language's artifact the gate complained about."""
     for lang in Language:
         if f"the {lang.value} reference" in report.detail:
+            return lang
+        if f"the {lang.value} scaffold" in report.detail:
             return lang
     return default
 

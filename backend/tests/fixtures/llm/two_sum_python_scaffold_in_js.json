@@ -1,0 +1,65 @@
+{
+  "title": "Two Sum",
+  "difficulty": "easy",
+  "topics": [
+    "arrays",
+    "hash maps"
+  ],
+  "statement_md": "Given an array of integers `nums` and an integer `target`, return the indices of the two numbers such that they add up to `target`.\n\nYou may assume exactly one valid answer exists, and you may not use the same element twice. Return the indices in ascending order.\n",
+  "constraints_md": "- `2 <= nums.length <= 10^4`\n- `-10^9 <= nums[i] <= 10^9`\n- exactly one valid answer exists",
+  "hint_md": "What have you already seen? A dictionary answers that in O(1).",
+  "signatures": [
+    {
+      "language": "python",
+      "function_name": "two_sum",
+      "scaffold": "def two_sum(nums, target):\n    # your code here\n    pass\n",
+      "reference_solution": "def two_sum(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return [seen[target - n], i]\n        seen[n] = i\n    return []\n"
+    },
+    {
+      "language": "javascript",
+      "function_name": "two_sum",
+      "scaffold": "def two_sum(nums, target):\n    # your code here\n    pass\n",
+      "reference_solution": "function two_sum(nums, target) {\n  const seen = new Map();\n  for (let i = 0; i < nums.length; i++) {\n    if (seen.has(target - nums[i])) return [seen.get(target - nums[i]), i];\n    seen.set(nums[i], i);\n  }\n  return [];\n}\nmodule.exports = { two_sum };\n"
+    },
+    {
+      "language": "typescript",
+      "function_name": "two_sum",
+      "scaffold": "def two_sum(nums, target):\n    # your code here\n    pass\n",
+      "reference_solution": "export function two_sum(nums: number[], target: number): number[] {\n  const seen = new Map<number, number>();\n  for (let i = 0; i < nums.length; i++) {\n    const need = target - nums[i];\n    if (seen.has(need)) return [seen.get(need) as number, i];\n    seen.set(nums[i], i);\n  }\n  return [];\n}\n"
+    }
+  ],
+  "visible_tests": [
+    {
+      "args": {
+        "nums": [
+          2,
+          7,
+          11,
+          15
+        ],
+        "target": 9
+      },
+      "expected": [
+        0,
+        1
+      ],
+      "explanation": "nums[0] + nums[1] == 9"
+    },
+    {
+      "args": {
+        "nums": [
+          3,
+          2,
+          4
+        ],
+        "target": 6
+      },
+      "expected": [
+        1,
+        2
+      ]
+    }
+  ],
+  "hidden_generator_py": "import json, random\nrandom.seed(7)\nfor _ in range(12):\n    n = random.randint(2, 40)\n    nums = [random.randint(-500, 500) for _ in range(n)]\n    i, j = random.sample(range(n), 2)\n    target = nums[i] + nums[j]\n    print(json.dumps({'args': {'nums': nums, 'target': target}}))\n",
+  "brute_force_py": "def two_sum(nums, target):\n    for i in range(len(nums)):\n        for j in range(i + 1, len(nums)):\n            if nums[i] + nums[j] == target:\n                return [i, j]\n    return []\n"
+}

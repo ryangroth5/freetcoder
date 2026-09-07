@@ -309,3 +309,44 @@ class TestConstraintsAreChecked:
         q = load("two_sum_good")
         q.constraints = []
         assert validate_question(q).accepted
+
+
+class TestScaffoldsMatchTheirLanguage:
+    """The gate executed references but never looked at the starter code.
+
+    A Python-shaped JavaScript scaffold passed validation and reached the
+    editor, so switching to JavaScript showed Python -- the artifact the
+    candidate actually sees was the one nothing checked.
+    """
+
+    ALL = [Language.PYTHON, Language.JAVASCRIPT, Language.TYPESCRIPT]
+
+    def test_a_python_scaffold_in_a_javascript_slot_is_rejected(self) -> None:
+        report = validate_question(
+            load("two_sum_python_scaffold_in_js"), languages=self.ALL
+        )
+        assert report.outcome is GateOutcome.SCAFFOLD_INVALID
+        assert "javascript scaffold is not valid javascript" in report.detail
+
+    def test_correct_scaffolds_pass(self) -> None:
+        report = validate_question(load("two_sum_multilang"), languages=self.ALL)
+        assert report.accepted, report.detail
+
+    def test_only_offered_languages_are_checked(self) -> None:
+        """A bad scaffold for a language nobody is offered must not block."""
+        report = validate_question(
+            load("two_sum_python_scaffold_in_js"), languages=[Language.PYTHON]
+        )
+        assert report.outcome is not GateOutcome.SCAFFOLD_INVALID
+
+    def test_an_unimplemented_body_is_still_valid(self) -> None:
+        """Starter code need not satisfy its own declared return type."""
+        q = load("two_sum_multilang")
+        sig = q.signature_for(Language.TYPESCRIPT)
+        assert sig is not None
+        sig.scaffold = (
+            "export function two_sum(nums: number[], target: number): number[] {\n"
+            "  // your code here\n}\n"
+        )
+        report = validate_question(q, languages=self.ALL)
+        assert report.outcome is not GateOutcome.SCAFFOLD_INVALID, report.detail

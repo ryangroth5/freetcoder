@@ -304,3 +304,37 @@ test.describe('question library', () => {
     await expect(page.getByText(/× the reference/)).toBeVisible({ timeout: 90_000 })
   })
 })
+
+test.describe('fixes from use', () => {
+  test('next question produces another question, not the results screen',
+    async ({ page }) => {
+      // In a single-question format the nav was hidden entirely and next()
+      // went to results, so there was no way to keep practising.
+      await startLeetCodeSession(page)
+      const next = page.getByTitle(/another question|Next question/)
+      await expect(next).toBeVisible()
+      await expect(next).toBeEnabled()
+
+      await next.click()
+      await expect(page.getByRole('heading', { name: /Two Sum/ }))
+        .toBeVisible({ timeout: 90_000 })
+      // Still a problem view, not the results screen.
+      await expect(page.getByRole('button', { name: 'Submit' })).toBeVisible()
+    })
+
+  test('the theme toggle changes the panels and persists', async ({ page }) => {
+    await startLeetCodeSession(page)
+    const before = await page.locator('html').getAttribute('data-theme')
+
+    await page.getByLabel('Toggle theme').click()
+    const after = await page.locator('html').getAttribute('data-theme')
+    expect(after).not.toBe(before)
+
+    const bg = await page.locator('body')
+      .evaluate((el) => getComputedStyle(el).backgroundColor)
+    expect(bg).toBe(after === 'dark' ? 'rgb(30, 30, 30)' : 'rgb(255, 255, 255)')
+
+    await page.reload()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', after!)
+  })
+})

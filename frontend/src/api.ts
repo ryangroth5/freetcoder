@@ -135,7 +135,13 @@ export interface SessionInfo {
   config: {
     session: { allow_skip: boolean; allow_revisit: boolean; timing: string }
     environment: { languages: Language[] }
-    generation: { give_hints: boolean }
+    generation: {
+      give_hints: boolean
+      style: string
+      preset_id: string
+      topics: string[]
+      freeform: string
+    }
   }
 }
 

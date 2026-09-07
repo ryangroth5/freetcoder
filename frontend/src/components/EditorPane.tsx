@@ -3,6 +3,19 @@ import { MonacoEditorReactComp } from '@typefox/monaco-editor-react'
 import type { WrapperConfig } from 'monaco-editor-wrapper'
 import { LogLevel } from '@codingame/monaco-vscode-api'
 import * as monaco from 'monaco-editor'
+// TextMate grammars. The wrapper runs in 'extended' mode, which enables the
+// VSCode TextMate tokenizer and *not* Monarch -- so setMonarchTokensProvider is
+// a silent no-op here and these extensions are the supported route to syntax
+// colouring. Excluded from Vite's prebundle in vite.config.ts, which is what
+// previously OOM'd esbuild.
+import '@codingame/monaco-vscode-python-default-extension'
+import '@codingame/monaco-vscode-javascript-default-extension'
+import '@codingame/monaco-vscode-typescript-basics-default-extension'
+// TextMate produces *scopes*; a theme maps them to colours. Without this the
+// grammars load and every token still renders as default text -- and the
+// console fills with 404s for the missing theme files.
+import '@codingame/monaco-vscode-theme-defaults-default-extension'
+import { monacoDidLoad } from '../theme'
 import type { Language } from '../api'
 
 /**
@@ -17,6 +30,11 @@ let languagesRegistered = false
 function registerLanguages(): void {
   if (languagesRegistered) return
   languagesRegistered = true
+  // These must be registered by hand. The default-extension packages imported
+  // above do not contribute their languages in this setup -- with them alone,
+  // models resolve to "plaintext", the language client's documentSelector never
+  // matches, and no diagnostics arrive at all. Correct language identification
+  // matters more than colour.
   monaco.languages.register({ id: 'python', extensions: ['.py'], aliases: ['Python'] })
   monaco.languages.register({ id: 'javascript', extensions: ['.js'], aliases: ['JavaScript'] })
   monaco.languages.register({ id: 'typescript', extensions: ['.ts'], aliases: ['TypeScript'] })
@@ -65,7 +83,7 @@ function modelUri(language: Language): monaco.Uri {
  * up the documents it owns.
  */
 export function EditorPane({
-  language, languages, value, onChange, onCursor, onReader,
+  language, languages, value, onChange, onCursor, onReader, theme,
 }: {
   language: Language
   languages: Language[]
@@ -75,6 +93,8 @@ export function EditorPane({
   /** Hands the caller a way to read the live buffer, so Run cannot execute a
    *  stale copy of the code the candidate is looking at. */
   onReader?: (read: (() => string) | null) => void
+  /** Seeds the editor's colour theme; later changes go through theme.ts. */
+  theme?: 'light' | 'dark'
 }) {
   const [lspDown, setLspDown] = useState(false)
   //: The editor arrives asynchronously. Without this in the swap effect's deps,
@@ -113,6 +133,9 @@ export function EditorPane({
           'editor.tabSize': 4,
           'editor.renderWhitespace': 'selection',
           'editor.bracketPairColorization.enabled': true,
+          'workbench.colorTheme': theme === 'dark'
+            ? 'Default Dark Modern'
+            : 'Default Light Modern',
         }),
       },
     },
@@ -156,6 +179,7 @@ export function EditorPane({
         ]),
       ),
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [endpoints.join(',')])
 
@@ -266,7 +290,17 @@ export function EditorPane({
           editor.onDidChangeCursorPosition((e) =>
             onCursor(e.position.lineNumber, e.position.column))
           onReader?.(() => editor.getModel()?.getValue() ?? '')
+
+          // Readiness first: syntax colours and themes are cosmetic, and a
+          // failure in either must not leave the editor unusable. An earlier
+          // ordering let a throw here strand `ready` at false, so nothing could
+          // type into a perfectly working editor.
           setReady(true)
+          try {
+            monacoDidLoad()
+          } catch (err) {
+            console.warn('editor theming unavailable:', err)
+          }
         }}
       />
       {lspDown && (

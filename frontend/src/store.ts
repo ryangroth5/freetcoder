@@ -96,6 +96,7 @@ interface State {
   submit: () => Promise<void>
   skip: () => Promise<void>
   next: () => Promise<void>
+  nextQuestion: () => Promise<void>
   tick: () => void
   currentSource: () => string
   clearError: () => void
@@ -280,6 +281,42 @@ export const useStore = create<State>((set, get) => ({
       return
     }
     await get().loadQuestion(index + 1)
+  },
+
+  /**
+   * Move on to another question.
+   *
+   * In a multi-question session that means the next one. In a single-question
+   * one it means a *new* question in the same format -- previously this landed
+   * on the results screen, so there was no way to keep practising without going
+   * back to the picker.
+   */
+  nextQuestion: async () => {
+    const { session, index } = get()
+    if (!session) return
+
+    if (index + 1 < session.question_count) {
+      await get().loadQuestion(index + 1)
+      return
+    }
+
+    set({ busy: true, error: null, notice: null })
+    try {
+      // Carry the format, preset and concentration over so "next" means
+      // "another one like this", not "start again".
+      const gen = session.config.generation
+      const fresh = await api.createSession({
+        style: gen.style,
+        preset: gen.preset_id || null,
+        topics: gen.topics,
+        freeform: gen.freeform,
+      })
+      await get().startSession(fresh)
+    } catch (err) {
+      set({ error: (err as Error).message })
+    } finally {
+      set({ busy: false })
+    }
   },
 
   /** What is actually on screen beats what the store last recorded.

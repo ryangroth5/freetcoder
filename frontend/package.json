@@ -11,6 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codingame/monaco-vscode-javascript-default-extension": "~16.1.1",
+    "@codingame/monaco-vscode-python-default-extension": "~16.1.1",
+    "@codingame/monaco-vscode-typescript-basics-default-extension": "~16.1.1",
     "@typefox/monaco-editor-react": "~6.7.0",
     "mermaid": "^11.17.2",
     "monaco-editor": "npm:@codingame/monaco-vscode-editor-api@~16.1.1",

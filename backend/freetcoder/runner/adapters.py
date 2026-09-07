@@ -54,6 +54,15 @@ class LanguageAdapter(Protocol):
         """Adapt the caller's limits to what this runtime can survive."""
         ...
 
+    def syntax_command(self, entry: str) -> Sequence[str]:
+        """argv that parses `entry` without running or type-checking it.
+
+        Used to prove an artifact is written in the language it claims. Type
+        checking would be wrong here: a scaffold with an unimplemented body is
+        valid starter code but need not satisfy its own return type.
+        """
+        ...
+
 
 def _as_compile_error(result: RunResult) -> RunResult:
     return RunResult(
@@ -93,6 +102,10 @@ class PythonAdapter:
 
     def adjust_limits(self, limits: Limits) -> Limits:
         return limits
+
+    def syntax_command(self, entry: str) -> Sequence[str]:
+        return [sys.executable, "-c",
+                f"import ast,sys;ast.parse(open({entry!r}).read())"]
 
 
 def _node_command(entry: str, limits: Limits) -> list[str]:
@@ -136,6 +149,9 @@ class JavaScriptAdapter:
 
     def adjust_limits(self, limits: Limits) -> Limits:
         return _node_limits(limits)
+
+    def syntax_command(self, entry: str) -> Sequence[str]:
+        return ["node", "--check", entry]
 
 
 #: Ambient declarations for the globals a submission may legitimately use.
@@ -219,6 +235,11 @@ class TypeScriptAdapter:
     def adjust_limits(self, limits: Limits) -> Limits:
         return _node_limits(limits)
 
+    def syntax_command(self, entry: str) -> Sequence[str]:
+        # --noCheck parses and reports syntax errors while skipping type
+        # checking, which is what "is this TypeScript at all?" needs.
+        return ["tsc", "--noEmit", "--noCheck", entry]
+
 
 ADAPTERS: dict[Language, LanguageAdapter] = {
     Language.PYTHON: PythonAdapter(),
@@ -246,6 +267,33 @@ def get_adapter(language: Language) -> LanguageAdapter:
 COMPILE_LIMITS = Limits(
     wall_seconds=30.0, cpu_seconds=25, memory_mb=768, limit_address_space=False
 )
+
+
+def check_syntax(language: Language, source: str) -> RunResult:
+    """Does `source` parse as `language`?
+
+    Answers the question the gate could not previously ask: an artifact can be
+    perfectly good code in the *wrong* language and nothing would notice.
+    """
+    adapter = get_adapter(language)
+    limits = adapter.adjust_limits(
+        Limits(wall_seconds=30.0, cpu_seconds=25, memory_mb=768)
+    )
+    with Workspace() as ws:
+        ws.write(adapter.source_filename, source)
+        result = execute(
+            adapter.syntax_command(adapter.source_filename), ws.path, limits=limits
+        )
+    if result.verdict is not Verdict.OK:
+        # tsc reports on stdout; python and node on stderr.
+        return RunResult(
+            Verdict.COMPILE_ERROR,
+            "",
+            (result.stderr + result.stdout).strip() or "does not parse",
+            result.exit_code,
+            result.duration_ms,
+        )
+    return result
 
 
 def run_source(
