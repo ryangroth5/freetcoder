@@ -100,7 +100,7 @@ interface State {
   tick: () => void
   currentSource: () => string
   clearError: () => void
-  publish: () => Promise<void>
+  publish: (allowImport?: boolean) => Promise<void>
   notice: string | null
   clearNotice: () => void
 }
@@ -165,12 +165,12 @@ export const useStore = create<State>((set, get) => ({
   clearError: () => set({ error: null }),
   clearNotice: () => set({ notice: null }),
 
-  publish: async () => {
+  publish: async (allowImport = false) => {
     const { session, index } = get()
     if (!session) return
     set({ busy: true, error: null, notice: null })
     try {
-      const saved = await api.publish(session.id, index)
+      const saved = await api.publish(session.id, index, allowImport)
       set({ notice: `Saved "${saved.title}" to the library.` })
     } catch (err) {
       // Publishing is a bonus, never a blocker: report and carry on.

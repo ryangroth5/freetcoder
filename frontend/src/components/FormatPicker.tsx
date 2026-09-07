@@ -31,7 +31,11 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
   const [warnings, setWarnings] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [source, setSource] = useState<'generate' | 'library'>('generate')
+  const [source, setSource] = useState<'generate' | 'library' | 'own'>('generate')
+  // Explicit rather than inferred: guessing intent from how much text someone
+  // typed would be wrong often enough to be annoying.
+  const [ownMode, setOwnMode] = useState<'describe' | 'paste'>('describe')
+  const [ownText, setOwnText] = useState('')
 
   useEffect(() => {
     api.formats().then(setStyles)
@@ -47,7 +51,8 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
     style: styleId ?? '',
     preset: presetId,
     topics: chosenTopics,
-    freeform,
+    freeform: source === 'own' && ownMode === 'describe' ? ownText : freeform,
+    import_text: source === 'own' && ownMode === 'paste' ? ownText : '',
     difficulty,
   }
 
@@ -88,13 +93,56 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
         <Choice selected={source === 'library'} onClick={() => setSource('library')}>
           From the library
         </Choice>
+        <Choice selected={source === 'own'} onClick={() => setSource('own')}>
+          Bring your own
+        </Choice>
       </div>
 
       {source === 'library' && <LibraryBrowser onStart={onStart} />}
 
-      {source === 'generate' && (
+      {source === 'own' && (
+        <section className="mt-6">
+          <div className="mb-3 flex gap-2">
+            <Choice small selected={ownMode === 'describe'}
+                    onClick={() => setOwnMode('describe')}>
+              Describe a question
+            </Choice>
+            <Choice small selected={ownMode === 'paste'}
+                    onClick={() => setOwnMode('paste')}>
+              Paste a question to adapt
+            </Choice>
+          </div>
+
+          <textarea
+            aria-label="Your question"
+            value={ownText}
+            onChange={(e) => setOwnText(e.target.value)}
+            rows={ownMode === 'paste' ? 12 : 4}
+            placeholder={ownMode === 'describe'
+              ? 'e.g. make a question about counting dogs in a kennel log'
+              : 'Paste the question here — statement, examples, constraints, '
+                + 'however much of it you have.'}
+            className="w-full rounded border border-[var(--color-edge)]
+                       bg-[var(--color-panel)] px-3 py-2 font-mono text-[13px]
+                       text-[var(--color-ink)] outline-none
+                       focus:border-[var(--color-accent)]"
+          />
+
+          <p className="mt-2 text-xs text-[var(--color-muted)]">
+            {ownMode === 'describe'
+              ? 'A topic or premise. The question itself is written for you.'
+              : 'Your text is a starting point: it will be tightened where the '
+                + 'prose leaves things open, and you will be told what was '
+                + 'assumed. It is validated by execution like any other '
+                + 'question, so it is provably solvable or you get a reason why '
+                + 'not.'}
+          </p>
+        </section>
+      )}
+
+      {(source === 'generate' || source === 'own') && (
         <>
-      <Tier n={1} title="Assessment style">
+      <Tier n={source === 'own' ? 2 : 1} title="Assessment style">
         <div className="flex flex-wrap gap-2">
           {styles.map((s) => (
             <Choice key={s.id} selected={styleId === s.id}
@@ -195,7 +243,7 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
 
       <button
         onClick={start}
-        disabled={!styleId || busy}
+        disabled={!styleId || busy || (source === 'own' && !ownText.trim())}
         className="mt-6 rounded bg-[var(--color-accent)] px-6 py-2 font-medium text-white
                    disabled:opacity-40"
       >

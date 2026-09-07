@@ -127,3 +127,78 @@ docker compose run --rm dev python -m freetcoder.generate \
 It reports every attempt by outcome, so a systematic failure — one language's
 convention, a generator pattern the model keeps getting wrong — shows up as a
 cluster rather than a vague sense that generation is flaky.
+
+---
+
+## Importing a question from text
+
+Two ways to bring your own problem, and they are genuinely different.
+
+**Describe** — "make a question about counting dogs" — is a topic steer. It goes
+to `generation.freeform`, which has always worked; it was simply buried in the
+picker's third tier.
+
+**Paste** — a question seen elsewhere, half-remembered, or sketched — goes to
+`generation.import_text` and sets `source = "imported"`. The distinction
+matters: the freeform prompt explicitly tells the model the text "refines the
+topic, it does not change the format", so a pasted statement would be treated as
+a hint and the model would write its own question instead.
+
+### The gate does not change
+
+An imported question passes exactly the same validation as a generated one: the
+reference runs, the examples match it, hidden cases generate, the brute force
+discriminates, every scaffold parses in its own language. So "I pasted something
+approximate" still yields a *provably solvable* question, or a clear reason why
+not.
+
+This is enforced, not merely intended:
+`test_import.py::test_no_gate_check_branches_on_provenance` reads the gate's own
+source and asserts it never mentions `import_text` or `source`. If validation
+could tell an import apart, an import could be held to a lower standard without
+anyone noticing.
+
+### Prompt layering
+
+`prompts/import.md` is appended *after* the style template, never instead of it,
+so an imported question is still a LeetCode or a Codility question. The source
+text supplies the problem; the style still supplies the format.
+
+The text is treated as a **starting point**. Supplied prose is almost always
+under-specified — the "Most Frequent Word" example elsewhere in these docs is
+typical — so the model is required to decide what the prose leaves open
+(tokenisation, tie-breaks, degenerate input, bounds) and to record every such
+judgement in `import_notes`.
+
+Those notes render above the statement as "Adapted from your text". Being told
+"ties break toward the earliest word" up front is the difference between an
+informed answer and a baffling failure.
+
+### Provenance
+
+The library is meant to be shared. A shared library quietly full of questions
+copied from LeetCode or Codility is a liability far easier to avoid now than to
+retract later.
+
+- `GatedQuestion` carries `source` and `import_text` into storage and across the
+  library boundary.
+- `library.publish` refuses an imported question unless
+  `allow_import_publish=True`; the API returns **409** for that (a decision you
+  can override) as opposed to **503** for an unreachable library (which you
+  cannot).
+- The Save button asks for confirmation on an imported question rather than
+  silently refusing or silently publishing.
+
+Recording provenance costs nothing now and cannot be reconstructed later.
+
+### Measuring it
+
+Import is a model-quality feature, so fixtures prove the plumbing and not the
+result:
+
+```bash
+docker compose run --rm dev python -m freetcoder.generate \
+    --style leetcode --import-text "count the dogs in a kennel log" -n 5
+docker compose run --rm dev python -m freetcoder.generate \
+    --style codility --import-file /srv/app/pasted.md -n 5
+```

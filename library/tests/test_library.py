@@ -8,6 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from library.app import create_app
+from library.models import PublishRequest
 from library.percentile import MIN_SAMPLES, percentile_for
 
 QUESTION = {
@@ -178,3 +179,43 @@ class TestPercentileMaths:
     def test_a_ratio_below_one_is_faster_than_the_reference(self) -> None:
         pct, samples, enough = percentile_for(0.5, [0.6, 0.7, 0.8, 0.9, 1.0])
         assert enough and samples == 5 and pct == 100
+
+
+class TestSchemaMigration:
+    """The service keeps a durable volume, so schema changes must migrate.
+
+    A column added to SCHEMA does nothing to an existing table -- publishing
+    against an older database failed with "no such column" as a 500.
+    """
+
+    async def test_a_database_missing_new_columns_is_upgraded(
+        self, tmp_path
+    ) -> None:
+        import aiosqlite
+
+        from library.storage import LibraryStore
+
+        path = str(tmp_path / "old.db")
+        # A database as an earlier version would have created it.
+        async with aiosqlite.connect(path) as db:
+            await db.execute(
+                "CREATE TABLE questions (id TEXT PRIMARY KEY, title TEXT NOT NULL,"
+                " style TEXT NOT NULL DEFAULT '', difficulty TEXT NOT NULL DEFAULT '',"
+                " topics TEXT NOT NULL DEFAULT '[]', languages TEXT NOT NULL DEFAULT '[]',"
+                " author TEXT NOT NULL DEFAULT 'anonymous', votes INTEGER NOT NULL"
+                " DEFAULT 0, created_at REAL NOT NULL, payload TEXT NOT NULL)"
+            )
+            await db.commit()
+
+        store = LibraryStore(path)
+        await store.connect()
+        try:
+            cur = await store.db.execute("PRAGMA table_info(questions)")
+            columns = {row["name"] for row in await cur.fetchall()}
+            assert {"source", "import_text"} <= columns
+
+            qid = await store.publish(PublishRequest.model_validate(QUESTION))
+            fetched = await store.get(qid)
+            assert fetched is not None and fetched.source == "generated"
+        finally:
+            await store.close()

@@ -46,6 +46,10 @@ export interface Question {
   hint_md: string | null
   complexity_target: string | null
   language: Language
+  /** "generated" or "imported". */
+  source: string
+  /** What the model assumed while adapting supplied text. Empty otherwise. */
+  import_notes: string
   /** Languages this format offers, in preset order. */
   languages: Language[]
   signatures: Signature[]
@@ -187,8 +191,11 @@ export interface PickerSelection {
   style: string
   preset?: string | null
   topics?: string[]
+  /** Steers the topic within a generated question. */
   freeform?: string
   difficulty?: Difficulty | null
+  /** Prose describing a question to adapt. Distinct from `freeform`. */
+  import_text?: string
 }
 
 export const api = {
@@ -232,9 +239,10 @@ export const api = {
       `/library/questions${query ? `?${query}` : ''}`,
     )
   },
-  publish: (id: string, index: number) =>
+  publish: (id: string, index: number, allowImport = false) =>
     post<{ id: string; title: string }>(
-      `/sessions/${id}/questions/${index}/publish`,
+      `/sessions/${id}/questions/${index}/publish`
+      + (allowImport ? '?allow_import=true' : ''),
     ),
   sessionFromLibrary: (qid: string) =>
     post<SessionInfo>(`/sessions/from-library/${qid}`),

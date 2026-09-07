@@ -82,14 +82,30 @@ export function ProblemView() {
             {resolved === 'dark' ? '☀' : '☾'}
           </button>
           <button
-            onClick={publish}
+            onClick={() => {
+              // An imported question may not be ours to share, so publishing it
+              // is a deliberate act rather than the same click as everything
+              // else.
+              if (question.source === 'imported') {
+                const ok = window.confirm(
+                  'This question was adapted from text you supplied, so it may '
+                  + 'not be yours to share. Publish it to the library anyway?',
+                )
+                if (!ok) return
+                void publish(true)
+                return
+              }
+              void publish()
+            }}
             disabled={busy}
-            title="Save this question to the shared library"
+            title={question.source === 'imported'
+              ? 'Adapted from your text — publishing asks for confirmation'
+              : 'Save this question to the shared library'}
             className="rounded border border-[var(--color-edge)] px-3 py-1 text-sm
                        text-[var(--color-muted)] hover:text-[var(--color-ink)]
                        disabled:opacity-40"
           >
-            ☆ Save
+            ☆ Save{question.source === 'imported' ? '*' : ''}
           </button>
           {allowSkip && (
             <button onClick={skip} disabled={busy}

@@ -109,6 +109,7 @@ def resolve(
     freeform: str = "",
     *,
     difficulty: Difficulty | None = None,
+    import_text: str = "",
 ) -> FormatConfig:
     """Merge the three picker tiers into one config.
 
@@ -140,6 +141,12 @@ def resolve(
         config.generation.topics = _normalise_topics(topics)
     if freeform.strip():
         config.generation.freeform = freeform.strip()
+    if import_text.strip():
+        # Supplied prose to adapt, as opposed to a topic steer. The style's
+        # structural rules still apply -- an imported question is still a
+        # LeetCode or a Codility question.
+        config.generation.source = "imported"
+        config.generation.import_text = import_text.strip()
 
     # Re-validate: preset overrides can produce an incoherent combination
     # (e.g. a question_count that no longer matches the difficulty curve).

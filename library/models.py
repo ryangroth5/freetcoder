@@ -29,12 +29,18 @@ class PublishRequest(BaseModel):
     #: Placeholder until accounts exist. Never trusted for anything.
     author: str = "anonymous"
 
+    #: Provenance. "imported" means adapted from text someone supplied, which a
+    #: shared library needs to be able to tell apart from original work.
+    source: str = "generated"
+    import_text: str = ""
+
 
 class QuestionSummary(BaseModel):
     """A search hit: enough to choose, not the whole question."""
 
     id: str
     title: str
+    source: str = "generated"
     style: str
     difficulty: str
     topics: list[str]

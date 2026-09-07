@@ -63,3 +63,48 @@ test.describe('app shell', () => {
     await expect(sql).toBeDisabled()
   })
 })
+
+test.describe('bring your own question', () => {
+  test('offers describe and paste modes', async ({ page }) => {
+    await gotoPicker(page)
+    await page.getByRole('button', { name: 'Bring your own' }).click()
+
+    await expect(page.getByRole('button', { name: 'Describe a question' }))
+      .toBeVisible()
+    await expect(page.getByRole('button', { name: 'Paste a question to adapt' }))
+      .toBeVisible()
+    await expect(page.getByLabel('Your question')).toBeVisible()
+  })
+
+  test('start is blocked until there is text', async ({ page }) => {
+    await gotoPicker(page)
+    await page.getByRole('button', { name: 'Bring your own' }).click()
+    await page.getByRole('button', { name: 'LeetCode' }).click()
+
+    await expect(page.getByRole('button', { name: 'Start' })).toBeDisabled()
+    await page.getByLabel('Your question').fill('count the dogs in a kennel log')
+    await expect(page.getByRole('button', { name: 'Start' })).toBeEnabled()
+  })
+
+  test('a pasted question starts a session', async ({ page }) => {
+    await gotoPicker(page)
+    await page.getByRole('button', { name: 'Bring your own' }).click()
+    await page.getByRole('button', { name: 'Paste a question to adapt' }).click()
+    await page.getByLabel('Your question').fill(
+      'Given a list of numbers and a target, return the indices of the two '
+      + 'numbers that add up to the target.',
+    )
+    await page.getByRole('button', { name: 'LeetCode' }).click()
+    await page.getByRole('button', { name: 'Start' }).click()
+
+    await expect(page.getByRole('button', { name: 'Submit' }))
+      .toBeVisible({ timeout: 90_000 })
+  })
+
+  test('the style tier is still offered for an import', async ({ page }) => {
+    await gotoPicker(page)
+    await page.getByRole('button', { name: 'Bring your own' }).click()
+    // An imported question still has to be *some* format.
+    await expect(page.getByRole('button', { name: 'Codility' })).toBeVisible()
+  })
+})

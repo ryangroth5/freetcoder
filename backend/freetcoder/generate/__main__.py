@@ -29,6 +29,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--preset", default=None)
     p.add_argument("--topics", default="", help="comma-separated concentrations")
     p.add_argument("--freeform", default="")
+    p.add_argument("--import-text", default="",
+                   help="prose describing a question to adapt")
+    p.add_argument("--import-file", type=Path, default=None,
+                   help="read the prose from a file instead")
     p.add_argument("--difficulty", default=None, choices=[d.value for d in Difficulty])
     p.add_argument("-n", "--count", type=int, default=1)
     p.add_argument("--attempts", type=int, default=4)
@@ -40,12 +44,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 async def _run(args: argparse.Namespace) -> int:
     try:
+        import_text = args.import_text
+        if args.import_file:
+            import_text = args.import_file.read_text(encoding="utf-8")
         config = resolve(
             args.style,
             args.preset,
             [t.strip() for t in args.topics.split(",") if t.strip()],
             args.freeform,
             difficulty=Difficulty(args.difficulty) if args.difficulty else None,
+            import_text=import_text,
         )
     except DifficultyLockedError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -62,6 +70,9 @@ async def _run(args: argparse.Namespace) -> int:
             return 2
 
     print(f"format : {config.label}  ({config.summary()})")
+    if config.generation.source == "imported":
+        preview = config.generation.import_text.replace("\n", " ")[:70]
+        print(f"source : imported -- {preview}...")
     print(f"asking : {args.count} question(s), up to {args.attempts} attempts each\n")
 
     reasons: collections.Counter[GateOutcome] = collections.Counter()

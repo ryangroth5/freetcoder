@@ -55,6 +55,10 @@ class StyleInfo(BaseModel):
     presets: list[dict[str, Any]]
 
 
+#: A paste, not an essay. Long enough for a real question with examples.
+MAX_IMPORT_CHARS = 8000
+
+
 class CreateSessionRequest(BaseModel):
     style: str
     preset: str | None = None
@@ -62,6 +66,9 @@ class CreateSessionRequest(BaseModel):
     freeform: str = ""
     difficulty: Difficulty | None = None
     language: Language = Language.PYTHON
+    #: Prose describing a question to adapt. Distinct from `freeform`, which
+    #: steers the topic within a generated question.
+    import_text: str = Field(default="", max_length=MAX_IMPORT_CHARS)
 
 
 class CaseInput(BaseModel):
@@ -167,6 +174,7 @@ def _resolve_or_400(payload: CreateSessionRequest) -> FormatConfig:
         return resolve(
             payload.style, payload.preset, payload.topics,
             payload.freeform, difficulty=payload.difficulty,
+            import_text=payload.import_text,
         )
     except DifficultyLockedError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -279,6 +287,8 @@ async def get_question(request: Request, sid: str, index: int) -> dict[str, Any]
         "function_name": sig.function_name if sig else "",
         "visible_tests": [t.model_dump(mode="json") for t in q.visible_tests],
         "hidden_test_count": len(gated.hidden_tests),
+        "source": gated.source,
+        "import_notes": q.import_notes,
         "remaining_seconds": remaining_seconds(session, config),
     }
 
@@ -406,16 +416,29 @@ async def library_questions(
 
 
 @router.post("/sessions/{sid}/questions/{index}/publish")
-async def publish_question(request: Request, sid: str, index: int) -> dict[str, Any]:
-    """Save a question to the shared library."""
+async def publish_question(
+    request: Request, sid: str, index: int, allow_import: bool = False
+) -> dict[str, Any]:
+    """Save a question to the shared library.
+
+    `allow_import` is required for a question adapted from supplied text, so
+    republishing someone else's question is deliberate rather than incidental.
+    """
     store = request.app.state.store
     session, gated = await _load(store, sid, index)
     library: QuestionLibrary = request.app.state.library
 
-    qid, error = await library.publish(gated, style=session["config"].generation.style)
+    qid, error = await library.publish(
+        gated,
+        style=session["config"].generation.style,
+        allow_import_publish=allow_import,
+    )
     if error is not None:
-        # A publishing failure is a disabled feature, never a broken session.
-        raise HTTPException(503, error.message)
+        # A refusal on provenance grounds is a decision the candidate can
+        # override; an unreachable library is not. Different codes, because the
+        # UI offers different affordances.
+        status = 409 if gated.source == "imported" and not allow_import else 503
+        raise HTTPException(status, error.message)
     await store.set_library_id(ids_index(session, index), qid)
     return {"id": qid, "title": gated.question.title}
 

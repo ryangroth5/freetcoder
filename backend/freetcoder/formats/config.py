@@ -9,6 +9,7 @@ drifting apart.
 from __future__ import annotations
 
 import enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -70,6 +71,12 @@ class GenerationConfig(BaseModel):
     real_world_framing: bool = False
     give_hints: bool = True
     topics: list[str] = Field(default_factory=list)
+    #: Where the question came from. An imported question is validated exactly
+    #: like a generated one; this only records provenance and gates publishing.
+    source: Literal["generated", "imported"] = "generated"
+    #: The prose the candidate supplied, verbatim.
+    import_text: str = ""
+
     #: Which tier-2 preset was chosen, and what it means. The id keeps cached
     #: questions from two presets of one style from colliding; the intent is
     #: what actually differentiates the generated question.

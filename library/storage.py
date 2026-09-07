@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS questions (
     topics      TEXT NOT NULL DEFAULT '[]',
     languages   TEXT NOT NULL DEFAULT '[]',
     author      TEXT NOT NULL DEFAULT 'anonymous',
+    source      TEXT NOT NULL DEFAULT 'generated',
+    import_text TEXT NOT NULL DEFAULT '',
     votes       INTEGER NOT NULL DEFAULT 0,
     created_at  REAL NOT NULL,
     payload     TEXT NOT NULL
@@ -51,7 +53,26 @@ class LibraryStore:
         self._db = await aiosqlite.connect(self._dsn, uri=self._uri)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
+        await self._migrate()
         await self._db.commit()
+
+    async def _migrate(self) -> None:
+        """Add columns that a database created by an older version lacks.
+
+        CREATE TABLE IF NOT EXISTS does nothing to an existing table, and this
+        service keeps a durable volume -- so a new column silently produced
+        "no such column" 500s against any database that predated it.
+        """
+        cur = await self.db.execute("PRAGMA table_info(questions)")
+        existing = {row["name"] for row in await cur.fetchall()}
+        for column, ddl in (
+            ("source", "TEXT NOT NULL DEFAULT 'generated'"),
+            ("import_text", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if column not in existing:
+                await self.db.execute(
+                    f"ALTER TABLE questions ADD COLUMN {column} {ddl}"
+                )
 
     async def close(self) -> None:
         if self._db is not None:
@@ -68,10 +89,12 @@ class LibraryStore:
         qid = uuid.uuid4().hex
         await self.db.execute(
             "INSERT INTO questions (id, title, style, difficulty, topics, languages,"
-            " author, votes, created_at, payload) VALUES (?,?,?,?,?,?,?,0,?,?)",
+            " author, source, import_text, votes, created_at, payload)"
+            " VALUES (?,?,?,?,?,?,?,?,?,0,?,?)",
             (qid, payload.title, payload.style, payload.difficulty,
              json.dumps(payload.topics), json.dumps(payload.languages),
-             payload.author, time.time(), json.dumps(payload.question)),
+             payload.author, payload.source, payload.import_text,
+             time.time(), json.dumps(payload.question)),
         )
         await self.db.commit()
         return qid
@@ -154,6 +177,7 @@ class LibraryStore:
             "topics": json.loads(row["topics"]),
             "languages": json.loads(row["languages"]),
             "author": row["author"],
+            "source": row["source"],
             "votes": row["votes"],
             "created_at": row["created_at"],
             "submissions": submissions,

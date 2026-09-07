@@ -41,7 +41,16 @@ class FakeLLM:
     #: rehearse a provider that cannot do tool calls.
     supports_tools: bool | None = None
 
-    def __init__(self, responses: Sequence[object] | None = None) -> None:
+    def __init__(
+        self, responses: Sequence[object] | None = None, *, cycle: bool = False
+    ) -> None:
+        #: Replay the queue forever instead of running dry. Offline mode uses
+        #: this: since the question cache became a fallback rather than the
+        #: default source, every session generates, so a fixed number of canned
+        #: responses runs out mid-session. Tests that assert on exhaustion leave
+        #: it off.
+        self._cycle = cycle
+        self._original: list[object] = list(responses or [])
         self._queue: list[object] = list(responses or [])
         self.calls: list[tuple[str, str]] = []
         #: Every tool invocation the loop made, for assertions.
@@ -63,10 +72,21 @@ class FakeLLM:
         self._queue.extend(responses)
         return self
 
+    def queue_next(self, *responses: object) -> FakeLLM:
+        """Put these at the *front*, ahead of anything already queued.
+
+        Tests usually care about what comes back from the next call, not about
+        appending behind a pre-seeded backlog.
+        """
+        self._queue[:0] = responses
+        return self
+
     async def complete_json(
         self, *, system: str, user: str, schema: type[M], temperature: float = 0.7
     ) -> M:
         self.calls.append((system, user))
+        if not self._queue and self._cycle and self._original:
+            self._queue = list(self._original)
         if not self._queue:
             raise LLMError("FakeLLM exhausted: more calls than queued responses")
         item = self._queue.pop(0)
@@ -113,7 +133,7 @@ class FakeLLM:
 
     @property
     def exhausted(self) -> bool:
-        return not self._queue
+        return not self._queue and not self._cycle
 
 
 def iter_fixture_names() -> Iterable[str]:

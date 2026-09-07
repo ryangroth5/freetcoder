@@ -107,6 +107,12 @@ class GeneratedQuestion(BaseModel):
         description="Python program printing one JSON object per line with an 'args' key"
     )
 
+    #: What the model changed or assumed while adapting supplied text. Empty for
+    #: a question generated from scratch. Shown to the candidate: being told
+    #: "I assumed ties break toward the earliest word" is the difference between
+    #: a surprising failure and an informed one.
+    import_notes: str = ""
+
     #: A deliberately naive implementation. The gate uses it to prove the
     #: performance tests actually discriminate -- it must agree with the
     #: reference on small inputs and time out on large ones.
@@ -165,6 +171,10 @@ class GatedQuestion(BaseModel):
     hidden_tests: list[TestCase]
     reference_ms: int = 0
     reference_ms_by_language: dict[str, int] = Field(default_factory=dict)
+    #: Provenance, carried through storage and across the library boundary.
+    #: Recording it costs nothing now and cannot be reconstructed later.
+    source: str = "generated"
+    import_text: str = ""
     language: Language = Language.PYTHON
 
     @property

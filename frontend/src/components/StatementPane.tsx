@@ -75,6 +75,20 @@ export function StatementPane({ question, referenceSolution }: {
               </div>
             )}
 
+            {question.import_notes && (
+              // The model was free to rewrite supplied text, so what it decided
+              // has to be visible. Being told "ties break toward the earliest
+              // word" up front beats discovering it through a failed case.
+              <div className="mt-4 rounded border border-[var(--color-accent)]/40
+                              bg-[var(--color-accent)]/10 p-3 text-sm">
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wide
+                                text-[var(--color-muted)]">
+                  Adapted from your text
+                </div>
+                {question.import_notes}
+              </div>
+            )}
+
             <div className="mt-4">
               <Markdown>{question.statement_md}</Markdown>
             </div>

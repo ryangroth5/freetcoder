@@ -44,6 +44,16 @@ def build_user_prompt(
     gen = config.generation
     parts: list[str] = [_read_prompt(gen.style)]
 
+    if gen.source == "imported" and gen.import_text:
+        # Layered *after* the style so an imported question is still a LeetCode
+        # or a Codility question -- the source text supplies the problem, not
+        # the format.
+        parts.append(f"\n{_read_prompt('import')}")
+        parts.append(
+            "\n### The candidate's text\n\n"
+            "```\n" + gen.import_text + "\n```"
+        )
+
     parts.append(f"\n## This question\n\n- Difficulty: **{difficulty.value}**")
     langs = ", ".join(lang.value for lang in config.environment.languages)
     parts.append(f"- Target language: {langs}")
@@ -109,15 +119,21 @@ class GenerationResult:
 
 
 def _gated(
-    question: GeneratedQuestion, report: GateReport, language: Language
+    question: GeneratedQuestion,
+    report: GateReport,
+    language: Language,
+    config: FormatConfig | None = None,
 ) -> GatedQuestion:
     """Package an accepted question with everything the gate computed."""
+    gen = config.generation if config else None
     return GatedQuestion(
         question=question,
         hidden_tests=report.hidden_cases,
         reference_ms=report.reference_ms,
         reference_ms_by_language=report.reference_ms_by_language,
         language=language,
+        source=gen.source if gen else "generated",
+        import_text=gen.import_text if gen else "",
     )
 
 
@@ -164,7 +180,7 @@ async def generate_question(
         )
 
         if report.accepted:
-            result.question = _gated(candidate, report, language)
+            result.question = _gated(candidate, report, language, config)
             return result
 
         log.info(
@@ -185,7 +201,7 @@ async def generate_question(
                     GenerationAttempt(outcome, title=candidate.title, repaired=True)
                 )
             if repaired is not None:
-                result.question = _gated(repaired, final_report, language)
+                result.question = _gated(repaired, final_report, language, config)
                 return result
             report = final_report
         user = (

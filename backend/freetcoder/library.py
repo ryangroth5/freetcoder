@@ -76,8 +76,26 @@ class QuestionLibrary:
             return None, LibraryError("The question library is unreachable.")
 
     async def publish(
-        self, gated: GatedQuestion, *, style: str, author: str = "anonymous"
+        self,
+        gated: GatedQuestion,
+        *,
+        style: str,
+        author: str = "anonymous",
+        allow_import_publish: bool = False,
     ) -> tuple[str | None, LibraryError | None]:
+        """Publish a question, refusing imports unless explicitly allowed.
+
+        The library is meant to be shared. A shared library quietly full of
+        questions copied from elsewhere is a liability that is far easier to
+        avoid now than to retract later, so republishing someone else's question
+        has to be a deliberate act.
+        """
+        if gated.source == "imported" and not allow_import_publish:
+            return None, LibraryError(
+                "This question was adapted from text you supplied, so it may not "
+                "be yours to share. Publish it deliberately if you are sure."
+            )
+
         payload = {
             "question": gated.model_dump(mode="json"),
             "title": gated.question.title,
@@ -86,6 +104,8 @@ class QuestionLibrary:
             "topics": gated.question.topics,
             "languages": [s.language.value for s in gated.question.signatures],
             "author": author,
+            "source": gated.source,
+            "import_text": gated.import_text,
         }
         body, error = await self._call("POST", "/questions", json=payload)
         return (body["id"] if body else None), error

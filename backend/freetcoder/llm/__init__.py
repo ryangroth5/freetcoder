@@ -29,8 +29,9 @@ def build_client(settings: Settings | None = None) -> LLMClient:
 
         from .fake import FIXTURE_DIR
 
-        payloads = [json.loads((FIXTURE_DIR / "two_sum_good.json").read_text())] * 50
-        return FakeLLM(payloads)
+        payload = json.loads((FIXTURE_DIR / "two_sum_good.json").read_text())
+        # Cycles: offline mode must not run dry part-way through a session.
+        return FakeLLM([payload], cycle=True)
     if not s.configured:
         return FakeLLM()
     return OpenAICompatibleClient(
