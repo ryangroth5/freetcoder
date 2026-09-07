@@ -233,6 +233,7 @@ backend/freetcoder/
   lsp_bridge.py  WebSocket <-> language-server stdio
 frontend/src/  React + Monaco + the three-tier picker
 docs/container-discovery.md   why the Dockerfile and build config look like this
+docs/testing.md               the four suites, what they cost, and what e2e-prod caught
 ```
 
 **Read `docs/container-discovery.md` before changing the Dockerfile, the runner,
