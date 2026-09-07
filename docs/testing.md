@@ -104,6 +104,12 @@ yet, and a flaky trust anchor costs more than three minutes.
 - `test_no_repair_target_can_touch_validation` fails whenever a repair target is
   added. That is the feature: every new target must be consciously admitted
   rather than silently gaining reach into the gate.
+- **A run that fails wholesale after editing frontend dependencies is probably
+  Vite's dep cache, not your code.** Adding and then removing an import of a new
+  package left `node_modules/.vite` poisoned: 16 editor tests failed and the run
+  took 17 minutes instead of 3. `rm -rf frontend/node_modules/.vite` and restart
+  `web`. Suspect this whenever the failures cluster in the editor and the run is
+  suddenly far slower.
 - Playwright runs with `workers: 1`. Submissions execute real code in a shared
   sandbox on a memory-constrained VM, so this has the same hazards as the
   backend parallelism above.
