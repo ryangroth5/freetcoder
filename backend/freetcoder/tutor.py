@@ -209,19 +209,23 @@ def _describe_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def probe_reference(gated: GatedQuestion, args: dict[str, Any]) -> str:
-    """Run the reference on `args` and report **only** what it returned.
+def run_reference(
+    gated: GatedQuestion, args: dict[str, Any], language: Language | None = None
+) -> tuple[bool, Any, str]:
+    """Run the reference on `args`. Returns (ok, value, error).
 
-    Behavioural access to the oracle, never source access. This is the same
-    information a candidate can obtain themselves, reached more conveniently.
+    The one place the intended solution is executed on demand. Both the tutor's
+    probe and the candidate's "compute expected" button go through here, so the
+    boundary -- output only, never source -- is enforced once.
     """
-    sig = gated.question.signature_for(gated.language)
+    language = language or gated.language
+    sig = gated.question.signature_for(language)
     if sig is None:
-        return "the intended solution is unavailable for this language"
+        return False, None, f"no {language.value} reference for this question"
 
-    adapter = get_adapter(gated.language)
+    adapter = get_adapter(language)
     result = run_source(
-        gated.language,
+        language,
         sig.reference_solution,
         harness=adapter.build_harness(sig.function_name),
         stdin=encode_cases([TestCase(args=args, expected=None)]),
@@ -229,15 +233,29 @@ def probe_reference(gated: GatedQuestion, args: dict[str, Any]) -> str:
     )
     decoded = decode_results(result.stdout)
     if not decoded:
-        return f"the intended solution could not run on {json.dumps(args)}"
+        return False, None, (
+            result.stderr.strip().splitlines()[-1][:200]
+            if result.stderr.strip() else "the reference produced no output"
+        )
     outcome = decoded[0]
     if not outcome.ok:
-        return (
-            f"the intended solution raises on {json.dumps(args)}: "
-            f"{outcome.error.strip().splitlines()[-1][:200]}"
-        )
-    return f"for {json.dumps(args)} the intended solution returns " \
-           f"{json.dumps(outcome.value)}"
+        lines = outcome.error.strip().splitlines()
+        return False, None, (lines[-1][:200] if lines else "the reference raised")
+    return True, outcome.value, ""
+
+
+def probe_reference(gated: GatedQuestion, args: dict[str, Any]) -> str:
+    """Run the reference on `args` and report **only** what it returned.
+
+    Behavioural access to the oracle, never source access. This is the same
+    information a candidate can obtain themselves, reached more conveniently.
+    """
+    ok, value, error = run_reference(gated, args)
+    if not ok:
+        return f"the intended solution could not run on {json.dumps(args)}: {error}"
+    return (
+        f"for {json.dumps(args)} the intended solution returns {json.dumps(value)}"
+    )
 
 
 def probe_tool_schema() -> dict[str, Any]:

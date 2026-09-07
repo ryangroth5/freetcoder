@@ -143,6 +143,7 @@ def _gated(
         hidden_tests=report.hidden_cases,
         reference_ms=report.reference_ms,
         reference_ms_by_language=report.reference_ms_by_language,
+        measured_growth=report.measured_growth,
         language=language,
         source=gen.source if gen else "generated",
         import_text=gen.import_text if gen else "",

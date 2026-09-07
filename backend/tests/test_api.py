@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from httpx import AsyncClient
 
@@ -723,3 +725,92 @@ class TestPerLanguagePerformanceBudget:
         assert not any(c["over_budget"] for c in body["cases"]), (
             "a correct JavaScript solution was judged over budget"
         )
+
+
+class TestComputeExpected:
+    """Ask what the intended solution returns for arguments you supply.
+
+    On demand rather than automatic: filling every case in would turn a question
+    into "type an input, read the answer".
+    """
+
+    async def test_it_returns_what_the_reference_produces(
+        self, client: AsyncClient
+    ) -> None:
+        sid = await start_session(client)
+        resp = await client.post(
+            f"/api/sessions/{sid}/questions/0/compute",
+            json={"args": {"nums": [2, 7, 11, 15], "target": 9}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["expected"] == [0, 1]
+
+    async def test_it_settles_an_edge_case(self, client: AsyncClient) -> None:
+        sid = await start_session(client)
+        body = (await client.post(
+            f"/api/sessions/{sid}/questions/0/compute",
+            json={"args": {"nums": [3, 3], "target": 6}},
+        )).json()
+        assert body["expected"] == [0, 1]
+
+    async def test_it_never_returns_the_solution_itself(
+        self, client: AsyncClient
+    ) -> None:
+        sid = await start_session(client)
+        body = (await client.post(
+            f"/api/sessions/{sid}/questions/0/compute",
+            json={"args": {"nums": [1, 2], "target": 3}},
+        )).json()
+        assert set(body) == {"expected"}
+        assert "def " not in json.dumps(body)
+
+    async def test_arguments_the_constraints_rule_out_are_refused(
+        self, client: AsyncClient, fake_llm: FakeLLM
+    ) -> None:
+        """Computing an answer for impossible input teaches the wrong thing."""
+        import json as _json
+
+        from freetcoder.llm.fake import FIXTURE_DIR
+
+        bounded = _json.loads((FIXTURE_DIR / "two_sum_good.json").read_text())
+        # Bounds the question's own generator satisfies, so the gate accepts it;
+        # the request below is what violates them.
+        bounded["constraints"] = [
+            {"name": "nums", "min_length": 2, "max_length": 40,
+             "element_min": -500, "element_max": 500},
+        ]
+        fake_llm.queue_next(bounded)
+
+        sid = await start_session(client)
+        resp = await client.post(
+            f"/api/sessions/{sid}/questions/0/compute",
+            json={"args": {"nums": [1] * 50, "target": 2}},
+        )
+        assert resp.status_code == 422
+        assert "constraints rule out" in resp.json()["detail"]
+
+    async def test_arguments_the_reference_cannot_run_are_refused(
+        self, client: AsyncClient
+    ) -> None:
+        sid = await start_session(client)
+        resp = await client.post(
+            f"/api/sessions/{sid}/questions/0/compute",
+            json={"args": {"not_a_parameter": 1}},
+        )
+        assert resp.status_code == 422
+        assert "could not run" in resp.json()["detail"]
+
+    async def test_a_language_the_format_does_not_offer_is_refused(
+        self, client: AsyncClient
+    ) -> None:
+        sid = await start_session(client)
+        resp = await client.post(
+            f"/api/sessions/{sid}/questions/0/compute",
+            json={"args": {"nums": [1, 2], "target": 3}, "language": "go"},
+        )
+        assert resp.status_code == 409
+
+    async def test_an_unknown_session_is_404(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/sessions/nope/questions/0/compute",
+                                 json={"args": {}})
+        assert resp.status_code == 404

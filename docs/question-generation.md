@@ -353,3 +353,62 @@ most reassuring part of the exchange.
 
 Budgets: `tutor_tool_budget` (probes per reply) and `tutor_message_cap`
 (questions per session).
+
+---
+
+## Computing an expected value
+
+`POST …/questions/{i}/compute` runs the intended solution on arguments you supply
+and returns **only the value**. It goes through the same `run_reference` the
+tutor's probe uses, so the boundary — output, never source — is enforced in one
+place.
+
+**On demand, not automatic.** Filling every case in as you type would turn any
+question into "type an input, read the answer". A button keeps probing one
+awkward edge case a single click away without making that the default. Computed
+values are labelled `expected (computed)` so you can tell them from your own.
+
+Arguments the question's own constraints rule out are refused: computing an
+answer for input the statement says cannot occur teaches the wrong thing.
+
+## Is the reference actually good?
+
+"Your code vs the reference" only means something if the reference is good. A
+secretly quadratic baseline claiming `O(n)` would flatter every submission, and
+the resulting percentile would be worse than no percentile.
+
+So a stated `complexity_target` is **measured, not trusted**. The reference is
+timed on the smallest and largest hidden inputs and the observed exponent
+
+```
+k = log(t_large / t_small) / log(n_large / n_small)
+```
+
+is compared with the claim, rejecting as `REFERENCE_TOO_SLOW` when it exceeds it
+by more than `EXPONENT_TOLERANCE`.
+
+### Two things this got wrong first
+
+**Comparing groups instead of sizes.** The first version compared the summed
+time of the smaller half of the cases against the larger half. Over
+exponentially growing inputs that shows roughly a 4x jump for a *linear*
+reference, which says nothing about complexity — it would have rejected good
+questions. Fitting an exponent against the actual input sizes is the fix.
+
+**Blaming the wrong artifact.** The brute-force check ran first, so a quadratic
+reference surfaced as `PERF_NOT_DISCRIMINATING` — "the tests do not separate a
+good solution from a naive one" — when the real problem was the baseline. The
+scaling check now runs first and names the reference.
+
+### Deliberate restraint
+
+- A question whose largest case runs in under `MEASURABLE_MS` is **skipped**,
+  not judged: silence beats a verdict invented from scheduling noise.
+- Timings are best-of-three, since this runs on a laptop sharing cores.
+- The tolerance is wide on purpose. This separates an *order of complexity*, not
+  constant factors.
+- The check tests honesty, not speed: the same quadratic reference is accepted
+  when it honestly claims `O(n^2)`.
+
+The measured growth is stored and shown beside the ratio, so the results pane
+says `1.3× the reference (~linear)` rather than a bare multiplier.

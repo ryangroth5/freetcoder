@@ -393,3 +393,98 @@ class TestClarificationsAreVerified:
         asked = " ".join(c.question.lower() for c in load("most_frequent_word").clarifications)
         for topic in ("capitalisation", "punctuation", "empty", "tie"):
             assert topic in asked, f"nothing settles {topic}"
+
+
+class TestTheReferenceIsAsFastAsItClaims:
+    """"Your code vs the reference" means nothing if the reference is bad.
+
+    A secretly quadratic baseline claiming O(n) would flatter every submission.
+    Timings use sleep rather than real work so the test measures the *check*,
+    not the machine, and finishes quickly.
+    """
+
+    # Sizes chosen so both the smallest and largest timings sit well above
+    # scheduler granularity: a sleep of a few microseconds measures the OS, not
+    # the algorithm, and flattens the observed exponent toward linear.
+    GENERATOR = (
+        "import json\n"
+        "for n in (800, 1600, 3200, 6400, 12800):\n"
+        "    print(json.dumps({'args': {'n': n}}))\n"
+    )
+
+    def _question(self, reference: str, target: str = "O(n) time") -> GeneratedQuestion:
+        q = load("two_sum_good")
+        q.complexity_target = target
+        q.constraints = []
+        # A stated target requires a brute force, and it must actually fail the
+        # large cases -- otherwise the target is unenforced.
+        q.brute_force_py = (
+            "import time\n\n"
+            "def work(n):\n"
+            "    time.sleep((n ** 2) * 0.00000005)\n"
+            "    return n\n"
+        )
+        q.hidden_generator_py = self.GENERATOR
+        q.visible_tests = [TestCase(args={"n": 800}, expected=800)]
+        for sig in q.signatures:
+            sig.function_name = "work"
+        q.signatures = [q.signatures[0]]
+        q.signatures[0].reference_solution = reference
+        q.signatures[0].scaffold = "def work(n):\n    pass\n"
+        return q
+
+    #: Proportional to n: 800 -> 8ms, 12800 -> 128ms.
+    LINEAR = (
+        "import time\n\n"
+        "def work(n):\n"
+        "    time.sleep(n * 0.00001)\n"
+        "    return n\n"
+    )
+    #: Proportional to n^2: 800 -> 8ms, 12800 -> ~2s.
+    QUADRATIC = (
+        "import time\n\n"
+        "def work(n):\n"
+        "    time.sleep((n ** 2) * 0.0000000125)\n"
+        "    return n\n"
+    )
+
+    def test_a_reference_matching_its_claim_passes(self) -> None:
+        report = validate_question(self._question(self.LINEAR))
+        assert report.outcome is not GateOutcome.REFERENCE_TOO_SLOW, report.detail
+
+    def test_a_quadratic_reference_claiming_linear_is_rejected(self) -> None:
+        report = validate_question(self._question(self.QUADRATIC))
+        assert report.outcome is GateOutcome.REFERENCE_TOO_SLOW, report.detail
+        assert "O(n) time" in report.detail
+        assert "meaningless" in report.detail
+
+    def test_the_same_reference_is_fine_when_it_claims_quadratic(self) -> None:
+        """The check tests honesty, not speed."""
+        report = validate_question(
+            self._question(self.QUADRATIC, target="O(n^2) time")
+        )
+        assert report.outcome is not GateOutcome.REFERENCE_TOO_SLOW, report.detail
+
+    def test_a_question_too_fast_to_measure_is_not_rejected(self) -> None:
+        """Silence beats a verdict invented from scheduling noise."""
+        instant = "def work(n):\n    return n\n"
+        report = validate_question(self._question(instant))
+        assert report.outcome is not GateOutcome.REFERENCE_TOO_SLOW
+
+    def test_no_claim_means_no_measurement(self) -> None:
+        q = load("two_sum_good")
+        q.complexity_target = None
+        q.brute_force_py = None
+        assert validate_question(q).accepted
+
+    def test_the_measured_growth_is_reported(self) -> None:
+        """So "1.3x the reference" can say what the reference actually is."""
+        report = validate_question(self._question(self.LINEAR))
+        assert report.accepted, report.detail
+        assert report.measured_growth == "~linear"
+
+    def test_the_check_does_not_reject_a_good_question_under_repetition(self) -> None:
+        """A check that randomly rejects good questions is worse than none."""
+        for _ in range(3):
+            report = validate_question(self._question(self.LINEAR))
+            assert report.outcome is not GateOutcome.REFERENCE_TOO_SLOW, report.detail

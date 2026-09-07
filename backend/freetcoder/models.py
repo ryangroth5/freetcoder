@@ -167,6 +167,7 @@ class GateOutcome(enum.StrEnum):
     UNSAFE_MAGNITUDE = "unsafe_magnitude"
     MISSING_BRUTE_FORCE = "missing_brute_force"
     SCAFFOLD_INVALID = "scaffold_invalid"
+    REFERENCE_TOO_SLOW = "reference_too_slow"
     BRUTE_FORCE_DISAGREES = "brute_force_disagrees"
     PERF_NOT_DISCRIMINATING = "perf_not_discriminating"
 
@@ -178,6 +179,7 @@ class GateReport(BaseModel):
     detail: str = ""
     hidden_cases: list[TestCase] = Field(default_factory=list)
     reference_ms: int = 0
+    measured_growth: str = ""
     #: Reference timing per language. A JS submission judged against a
     #: Python-derived budget is being measured against the wrong yardstick.
     reference_ms_by_language: dict[str, int] = Field(default_factory=dict)
@@ -198,6 +200,9 @@ class GatedQuestion(BaseModel):
     hidden_tests: list[TestCase]
     reference_ms: int = 0
     reference_ms_by_language: dict[str, int] = Field(default_factory=dict)
+    #: Observed growth of the reference across input sizes, e.g. "~linear".
+    #: Shown beside the ratio so "1.3x the reference" says what the reference is.
+    measured_growth: str = ""
     #: Provenance, carried through storage and across the library boundary.
     #: Recording it costs nothing now and cannot be reconstructed later.
     source: str = "generated"

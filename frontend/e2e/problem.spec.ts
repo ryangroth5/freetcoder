@@ -408,3 +408,31 @@ test.describe('tutor', () => {
     expect(reply.trim().length).toBeGreaterThan(10)
   })
 })
+
+test.describe('compute expected', () => {
+  test('fills a case in from the intended solution', async ({ page }) => {
+    await startLeetCodeSession(page)
+    await page.getByRole('button', { name: 'Testcase' }).click()
+
+    // A case with no expected value yet.
+    await page.getByRole('button', { name: '+ Add case' }).click()
+    const rows = page.getByLabel(/^Case \d+ nums$/)
+    const last = (await rows.count()) - 1
+    await rows.nth(last).fill('[3, 3]')
+    await page.getByLabel(/^Case \d+ target$/).nth(last).fill('6')
+
+    await page.getByRole('button', { name: 'Compute expected' }).nth(last).click()
+
+    // It is filled in, and labelled as computed rather than authored.
+    await expect(page.getByText('expected (computed)')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByLabel(/^Case \d+ expected$/).nth(last))
+      .toHaveValue('[0,1]')
+  })
+
+  test('a computed case then passes when run', async ({ page }) => {
+    await startLeetCodeSession(page)
+    await page.getByRole('button', { name: 'Testcase' }).click()
+    await page.getByRole('button', { name: 'Compute expected' }).first().click()
+    await expect(page.getByText('expected (computed)')).toBeVisible({ timeout: 30_000 })
+  })
+})

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Sequence
 
 from ..models import (
@@ -472,6 +473,120 @@ def _check_magnitudes(
     return None
 
 
+#: Below this the timings are scheduling noise rather than measurement. A check
+#: that rejects good questions under load is worse than no check.
+MEASURABLE_MS = 15.0
+
+#: How far above the claimed exponent an observed one may sit. Generous on
+#: purpose: this separates an order of complexity, not constant factors.
+EXPONENT_TOLERANCE = 0.7
+
+#: Timing repeats, best-of, to blunt scheduling noise on a shared machine.
+TIMING_REPEATS = 3
+
+
+def _claimed_exponent(target: str) -> float | None:
+    """The exponent a stated complexity implies, if it can be read at all."""
+    text = target.lower().replace(" ", "")
+    if "n^3" in text or "n³" in text:
+        return 3.0
+    if "n^2" in text or "n²" in text or "n*n" in text:
+        return 2.0
+    if "nlog" in text:
+        return 1.15
+    if "o(n" in text:
+        return 1.0
+    return None
+
+
+def _input_size(case: TestCase) -> int:
+    """A stand-in for n: the largest collection, or the largest number."""
+    best = 0
+    for value in case.args.values():
+        if isinstance(value, (list, str)):
+            best = max(best, len(value))
+        elif isinstance(value, bool):
+            continue
+        elif isinstance(value, (int, float)):
+            best = max(best, int(abs(value)))
+    return best
+
+
+def _time_one(sig: Signature, case: TestCase) -> float | None:
+    """Best of a few runs for a single case."""
+    best: float | None = None
+    for _ in range(TIMING_REPEATS):
+        verdict, results, _ = _run_cases(
+            sig.reference_solution, sig.function_name, [case], REFERENCE_LIMITS
+        )
+        if verdict is not Verdict.OK or not results or not results[0].ok:
+            return None
+        best = results[0].ms if best is None else min(best, results[0].ms)
+    return best
+
+
+def _describe_exponent(k: float) -> str:
+    if k < 1.4:
+        return "~linear"
+    if k < 2.4:
+        return "~quadratic"
+    return "worse than quadratic"
+
+
+def _check_reference_scaling(
+    q: GeneratedQuestion, sig: Signature, hidden: list[TestCase]
+) -> tuple[str, GateReport | None]:
+    """Does the reference grow the way the question claims?
+
+    "Your code vs the reference" only means something if the reference is good:
+    a secretly quadratic baseline claiming O(n) would flatter every submission.
+
+    Measured rather than trusted. The reference is timed on the smallest and
+    largest hidden inputs, and the observed exponent
+
+        k = log(t_large / t_small) / log(n_large / n_small)
+
+    is compared with the claim. Comparing *sums* of case groups would not work:
+    over exponentially growing inputs even a linear reference shows a ~4x jump,
+    which has nothing to do with its complexity.
+    """
+    claimed = _claimed_exponent(q.complexity_target or "")
+    if claimed is None or len(hidden) < 4:
+        return "", None
+
+    by_size = sorted(hidden, key=_input_size)
+    small, large = by_size[0], by_size[-1]
+    n_small, n_large = _input_size(small), _input_size(large)
+    if n_small < 2 or n_large < n_small * 4:
+        # Not enough spread between the smallest and largest input to say
+        # anything about growth.
+        return "", None
+
+    t_small = _time_one(sig, small)
+    t_large = _time_one(sig, large)
+    if t_small is None or t_large is None:
+        return "", None
+    if t_large < MEASURABLE_MS:
+        # Too fast to measure: silence beats a verdict invented from noise.
+        return "", None
+
+    t_small = max(t_small, 0.05)
+    observed = math.log(t_large / t_small) / math.log(n_large / n_small)
+    label = _describe_exponent(observed)
+
+    if observed > claimed + EXPONENT_TOLERANCE:
+        return label, GateReport(
+            outcome=GateOutcome.REFERENCE_TOO_SLOW,
+            detail=(
+                f"the reference claims {q.complexity_target}, but timing it on "
+                f"inputs of size {n_small} and {n_large} showed growth of about "
+                f"n^{observed:.1f} ({label}). A baseline slower than it claims "
+                f"makes the performance comparison meaningless."
+            ),
+        )
+    return label, None
+
+
 def validate_question(
     q: GeneratedQuestion,
     *,
@@ -528,6 +643,13 @@ def validate_question(
     if (report := _check_magnitudes(hidden + list(q.visible_tests), offered)) is not None:
         return report
 
+    growth = ""
+    if q.complexity_target:
+        report_to(f"measuring whether the reference really is {q.complexity_target}")
+        growth, report = _check_reference_scaling(q, sig, hidden)
+        if report is not None:
+            return report
+
     if q.brute_force_py or q.complexity_target:
         report_to("checking a naive solution cannot pass")
     if (report := _check_brute_force_discriminates(q, sig, hidden)) is not None:
@@ -547,4 +669,5 @@ def validate_question(
         hidden_cases=hidden,
         reference_ms=reference_ms,
         reference_ms_by_language=timings,
+        measured_growth=growth,
     )

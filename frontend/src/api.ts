@@ -112,6 +112,8 @@ export interface RunReport {
   /** submission time / reference time, measured back to back on this machine. */
   ratio?: number | null
   percentile?: number | null
+  reference_growth?: string
+  complexity_target?: string
   samples?: number
   enough_samples?: boolean
 }
@@ -263,6 +265,12 @@ export const api = {
       `/sessions/${id}/questions/${index}/skip`,
     ),
   results: (id: string) => request<SessionResults>(`/sessions/${id}/results`),
+
+  computeExpected: (
+    id: string, index: number, args: Record<string, unknown>, language: Language,
+  ) => post<{ expected: unknown }>(
+    `/sessions/${id}/questions/${index}/compute`, { args, language },
+  ),
 
   chatState: (id: string, index: number) =>
     request<ChatState>(`/sessions/${id}/questions/${index}/chat`),

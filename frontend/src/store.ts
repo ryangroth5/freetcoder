@@ -14,6 +14,8 @@ export interface EditableCase {
   expected: string
   /** Blank expected means "just show me the output", not "expect null". */
   assertExpected: boolean
+  /** True when the expected value came from the intended solution, not you. */
+  computed?: boolean
 }
 
 let caseSeq = 0
@@ -92,6 +94,7 @@ interface State {
   removeCase: (id: string) => void
   resetCases: () => void
   casesAreValid: () => boolean
+  computeExpected: (id: string) => Promise<void>
   startSession: (session: SessionInfo) => Promise<void>
   loadQuestion: (index: number) => Promise<void>
   run: () => Promise<void>
@@ -165,6 +168,41 @@ export const useStore = create<State>((set, get) => ({
 
   casesAreValid: () =>
     get().cases.every((c) => Object.keys(caseErrors(c)).length === 0),
+
+  /** Fill in one case's expected value from the intended solution. */
+  computeExpected: async (id) => {
+    const { session, index, language, cases } = get()
+    const target = cases.find((c) => c.id === id)
+    if (!session || !target) return
+
+    // Only the arguments need to parse; the expected field is what we are
+    // about to replace.
+    let args: Record<string, unknown>
+    try {
+      args = Object.fromEntries(
+        Object.entries(target.args).map(([k, raw]) => [k, JSON.parse(raw)]),
+      )
+    } catch {
+      set({ error: 'Fix the arguments before computing an expected value.' })
+      return
+    }
+
+    set({ busy: true, error: null })
+    try {
+      const { expected } = await api.computeExpected(
+        session.id, index, args, language,
+      )
+      get().updateCase(id, {
+        expected: JSON.stringify(expected),
+        assertExpected: true,
+        computed: true,
+      })
+    } catch (err) {
+      set({ error: (err as Error).message })
+    } finally {
+      set({ busy: false })
+    }
+  },
   clearError: () => set({ error: null }),
   clearNotice: () => set({ notice: null }),
 

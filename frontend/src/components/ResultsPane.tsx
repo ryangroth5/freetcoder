@@ -75,6 +75,11 @@ export function ResultsPane({ question, report, busy }: {
                         title="Your time divided by the reference solution's, both
                                measured on this machine just now. Below 1.00 beats it.">
                     {report.ratio.toFixed(2)}× the reference
+                    {report.reference_growth
+                      ? ` (${report.reference_growth})`
+                      : report.complexity_target
+                        ? ` (${report.complexity_target})`
+                        : ''}
                   </span>
                 )}
                 {report.enough_samples && report.percentile != null && (
@@ -218,8 +223,8 @@ function Tab({ active, onClick, children }: {
 
 /** The Testcase tab: an unlimited, editable case list. */
 function CaseEditor({ question }: { question: Question }) {
-  const { cases, updateCase, addCase, duplicateCase, removeCase, resetCases } =
-    useStore()
+  const { cases, updateCase, addCase, duplicateCase, removeCase, resetCases,
+          computeExpected, busy } = useStore()
 
   return (
     <div className="space-y-3">
@@ -231,6 +236,8 @@ function CaseEditor({ question }: { question: Question }) {
           onChange={(patch) => updateCase(c.id, patch)}
           onDuplicate={() => duplicateCase(c.id)}
           onRemove={cases.length > 1 ? () => removeCase(c.id) : undefined}
+          onCompute={() => computeExpected(c.id)}
+          busy={busy}
         />
       ))}
 
@@ -256,12 +263,14 @@ function CaseEditor({ question }: { question: Question }) {
   )
 }
 
-function CaseRow({ index, value, onChange, onDuplicate, onRemove }: {
+function CaseRow({ index, value, onChange, onDuplicate, onRemove, onCompute, busy }: {
   index: number
   value: EditableCase
   onChange: (patch: Partial<EditableCase>) => void
   onDuplicate: () => void
   onRemove?: () => void
+  onCompute: () => void
+  busy: boolean
 }) {
   const errors = caseErrors(value)
 
@@ -288,18 +297,31 @@ function CaseRow({ index, value, onChange, onDuplicate, onRemove }: {
         </Field>
       ))}
 
-      <label className="mb-1 mt-2 flex items-center gap-2 text-xs
-                        text-[var(--color-muted)]">
-        <input
-          type="checkbox"
-          checked={value.assertExpected}
-          onChange={(e) => onChange({ assertExpected: e.target.checked })}
-        />
-        Check against an expected value
-      </label>
+      <div className="mb-1 mt-2 flex items-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+          <input
+            type="checkbox"
+            checked={value.assertExpected}
+            onChange={(e) => onChange({ assertExpected: e.target.checked })}
+          />
+          Check against an expected value
+        </label>
+        <button
+          onClick={onCompute}
+          disabled={busy}
+          title="Ask the intended solution what these arguments produce"
+          className="ml-auto text-xs text-[var(--color-muted)] underline
+                     hover:text-[var(--color-ink)] disabled:opacity-40"
+        >
+          Compute expected
+        </button>
+      </div>
 
       {value.assertExpected && (
-        <Field label="expected" error={errors.expected}>
+        <Field
+          label={value.computed ? 'expected (computed)' : 'expected'}
+          error={errors.expected}
+        >
           <input
             aria-label={`Case ${index + 1} expected`}
             value={value.expected}

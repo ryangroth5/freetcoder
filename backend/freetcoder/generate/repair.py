@@ -53,6 +53,7 @@ TARGET_FOR: dict[GateOutcome, RepairTarget] = {
     GateOutcome.BRUTE_FORCE_DISAGREES: "brute_force",
     GateOutcome.MISSING_BRUTE_FORCE: "brute_force",
     GateOutcome.PERF_NOT_DISCRIMINATING: "generator",
+    GateOutcome.REFERENCE_TOO_SLOW: "reference",
     GateOutcome.VISIBLE_MISMATCH: "visible_tests",
     GateOutcome.SCHEMA_INVALID: "whole",
 }

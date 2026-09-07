@@ -41,6 +41,7 @@ from .tutor import (
     is_available,
     probe_reference,
     probe_tool_schema,
+    run_reference,
 )
 
 log = logging.getLogger(__name__)
@@ -111,6 +112,13 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=4000)
     source: str = ""
+    language: Language = Language.PYTHON
+
+
+class ComputeRequest(BaseModel):
+    """Ask what the intended solution returns for one set of arguments."""
+
+    args: dict[str, Any] = Field(default_factory=dict)
     language: Language = Language.PYTHON
 
 
@@ -400,6 +408,9 @@ async def submit(
     payload_out["reference_solution"] = _reference(gated)
     payload_out["total_ms"] = round(report.total_ms, 2)
     payload_out["ratio"] = report.ratio
+    # Say what the reference *is*: "1.3x the reference" alone means little.
+    payload_out["reference_growth"] = gated.measured_growth
+    payload_out["complexity_target"] = gated.question.complexity_target or ""
 
     # Rank against everyone else, when this question is in the library and the
     # solution actually worked. A failure here is silent by design.
@@ -427,6 +438,48 @@ async def skip(request: Request, sid: str, index: int) -> dict[str, Any]:
         source="", kind="skip", verdict="skipped", score=0.0,
     )
     return {"skipped": True, "reference_solution": _reference(gated)}
+
+
+@router.post("/sessions/{sid}/questions/{index}/compute")
+async def compute_expected(
+    request: Request, sid: str, index: int, payload: ComputeRequest
+) -> dict[str, Any]:
+    """What the intended solution returns for these arguments.
+
+    Deliberately on demand rather than automatic: filling every case in would
+    turn any question into "type an input, read the answer", while a button
+    keeps probing one awkward edge case a single click away.
+
+    Returns the value only. This is the same boundary the tutor's probe uses,
+    and it goes through the same function.
+    """
+    store = request.app.state.store
+    session, gated = await _load(store, sid, index)
+    _require_offered(session["config"], payload.language)
+
+    # Refuse arguments the question says cannot occur: computing an answer for
+    # impossible input would teach the wrong thing.
+    for constraint in gated.question.constraints:
+        value = payload.args.get(constraint.name)
+        if value is None:
+            continue
+        if (why := _violates(value, constraint)) is not None:
+            raise HTTPException(
+                422, f"{constraint.name} {why}, which the question's constraints rule out"
+            )
+
+    ok, value, error = run_reference(gated, payload.args, payload.language)
+    if not ok:
+        raise HTTPException(
+            422, f"the intended solution could not run on those arguments: {error}"
+        )
+    return {"expected": value}
+
+
+def _violates(value: Any, constraint: Any) -> str | None:
+    from .generate.gate import _violation
+
+    return _violation(value, constraint)
 
 
 # ------------------------------------------------------------------- tutor
