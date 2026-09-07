@@ -391,3 +391,58 @@ asserting "no library configured" passed locally and failed in-container until
 `conftest.py` cleared both. Same class of bug as the earlier database one: tests
 that inherit ambient configuration quietly assert something other than what they
 appear to.
+
+---
+
+# Phase H findings (syntax highlighting, unresolved)
+
+Three approaches tried, none delivering colour. Recorded so the next attempt
+starts from the facts rather than repeating them.
+
+## Monarch is not available in `extended` mode
+`monaco-editor-wrapper/dist/vscode/services.js` decides by `$type`:
+
+```js
+if ($type === 'extended') { textmate + theme service overrides }
+else                      { monarch service override }
+```
+
+We run `extended` (the language client needs it), so
+`monaco.languages.setMonarchTokensProvider` is a **silent no-op** — it neither
+throws nor colours. Hand-written Monarch grammars were written, verified to
+compile, and discarded on this finding.
+
+## The default-extension packages do not contribute their languages
+Importing `@codingame/monaco-vscode-python-default-extension` and friends does
+not register `python` as a language here: with our manual
+`monaco.languages.register` calls removed, models resolved to **`plaintext`**,
+which breaks the language client's `documentSelector` and stops diagnostics
+entirely. Manual registration is therefore required for the LSP to work, and it
+appears to shadow whatever grammar binding the extension would otherwise make —
+every token renders as `mtk1`.
+
+`optimizeDeps.exclude` does fix the earlier esbuild OOM, so the packages now
+install and load without crashing Vite. They simply have no visible effect.
+
+## Two ordering constraints, both found by a silently dead editor
+- **Monaco's theme API cannot be touched before the wrapper starts.** Calling
+  `defineTheme`/`setTheme` at app boot leaves monaco-vscode-api in a state where
+  the editor never renders — no exception, no console error, just nothing.
+- **Cosmetics must be applied after readiness is signalled.** With
+  `registerGrammars()` and `monacoDidLoad()` running before `setReady(true)`, a
+  throw in either stranded `data-editor-ready="false"` forever: a working
+  editor that nothing would type into.
+
+Both are the same lesson: theming and highlighting are decoration, and must
+never sit on the path that makes the editor usable.
+
+## Where to go next
+1. Find how the TextMate service resolves a grammar to a language id, and
+   register the grammar against our manually-registered language directly,
+   rather than relying on the extension's contribution.
+2. Or run a second wrapper configuration in `classic` mode purely to establish
+   whether Monarch colours work there, then decide whether the language client
+   can live without `extended`.
+
+Not attempted: shipping the real `monaco-editor` package for its grammars. Two
+copies of the Monaco API is the trap that produced a blank page in Phase C.
