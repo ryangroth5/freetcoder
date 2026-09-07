@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import AsyncIterator
 
@@ -67,3 +68,32 @@ SOLUTION = (
 )
 
 WRONG_SOLUTION = "def two_sum(nums, target):\n    return [0, 0]\n"
+
+
+@pytest.fixture
+def quick_kill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shorten the wall clock for tests that wait out a real timeout.
+
+    These tests assert that runaway code *is* killed and its process tree goes
+    with it. The production limit governs how long a candidate may wait, which
+    is not what is under test, so waiting the full 15 seconds only buys slower
+    feedback. Two seconds still exercises the same kill path.
+
+    Applied per test rather than globally: anything that measures runtime --
+    the reference-scaling check especially -- needs the real headroom.
+    """
+    from freetcoder import service
+    from freetcoder.generate import gate, tools
+    from freetcoder.runner.types import Limits
+
+    def short(limits: Limits) -> Limits:
+        return dataclasses.replace(limits, wall_seconds=2.0, cpu_seconds=2)
+
+    for module, name in (
+        (gate, "REFERENCE_LIMITS"),
+        (gate, "GENERATOR_LIMITS"),
+        (gate, "BRUTE_FORCE_LIMITS"),
+        (tools, "TOOL_LIMITS"),
+        (service, "SUBMISSION_LIMITS"),
+    ):
+        monkeypatch.setattr(module, name, short(getattr(module, name)))

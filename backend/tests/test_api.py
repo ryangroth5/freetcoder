@@ -145,7 +145,7 @@ class TestSessionLifecycle:
         assert body["verdict"] == "compile_error"
 
     async def test_infinite_loop_submission_does_not_hang_the_api(
-        self, client: AsyncClient
+        self, client: AsyncClient, quick_kill: None
     ) -> None:
         sid = await start_session(client)
         body = (await client.post(

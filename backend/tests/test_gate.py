@@ -86,7 +86,7 @@ class TestRejectsBrokenQuestions:
 
 
 class TestGateIsRobust:
-    def test_hostile_generator_cannot_hang_the_gate(self) -> None:
+    def test_hostile_generator_cannot_hang_the_gate(self, quick_kill: None) -> None:
         q = load("two_sum_good")
         q.hidden_generator_py = "while True: pass"
         assert validate_question(q).outcome is GateOutcome.GENERATOR_FAILED
@@ -102,7 +102,7 @@ class TestGateIsRobust:
         report = validate_question(q)
         assert len(report.hidden_cases) <= 40
 
-    def test_reference_that_loops_forever_is_caught(self) -> None:
+    def test_reference_that_loops_forever_is_caught(self, quick_kill: None) -> None:
         q = load("two_sum_good")
         q.signatures[0].reference_solution = (
             "def two_sum(nums, target):\n    while True: pass\n"

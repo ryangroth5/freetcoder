@@ -46,7 +46,7 @@ class TestToolsRunInTheSandbox:
         assert "runtime_error" in out
         assert "PermissionError" in out or "Operation not permitted" in out
 
-    def test_an_infinite_loop_is_killed(self) -> None:
+    def test_an_infinite_loop_is_killed(self, quick_kill: None) -> None:
         assert "timeout" in run_code("python", "while True: pass")
 
     def test_writes_outside_the_workspace_are_denied(self) -> None:
