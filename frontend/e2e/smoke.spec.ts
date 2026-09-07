@@ -108,3 +108,65 @@ test.describe('bring your own question', () => {
     await expect(page.getByRole('button', { name: 'Codility' })).toBeVisible()
   })
 })
+
+test.describe('generation progress', () => {
+  /**
+   * Hold the session response open so the panel is observable.
+   *
+   * Offline mode answers almost instantly, so without this the panel is gone
+   * before it renders. A real generation takes tens of seconds; this simulates
+   * that without waiting for one.
+   */
+  async function withSlowGeneration(page: import('@playwright/test').Page) {
+    await page.route('**/api/sessions', async (route) => {
+      try {
+        // Let the server do the work first -- that is what records the steps --
+        // then hold the response so the panel stays on screen.
+        const response = await route.fetch()
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+        await route.fulfill({ response })
+      } catch {
+        // The page can close while the response is held; a teardown race is
+        // not a test failure.
+      }
+    })
+  }
+
+  test('names real steps while generating', async ({ page }) => {
+    await gotoPicker(page)
+    await withSlowGeneration(page)
+    await page.getByRole('button', { name: 'LeetCode' }).click()
+    await page.getByRole('button', { name: 'Start' }).click()
+
+    // A truthful log rather than a spinner.
+    await expect(page.getByText('Building your question'))
+      .toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText(/asking the model|reusing a question/))
+      .toBeVisible({ timeout: 30_000 })
+  })
+
+  test('the elapsed time advances', async ({ page }) => {
+    await gotoPicker(page)
+    await withSlowGeneration(page)
+    await page.getByRole('button', { name: 'LeetCode' }).click()
+    await page.getByRole('button', { name: 'Start' }).click()
+
+    await expect(page.getByText('Building your question'))
+      .toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText(/^[2-9]\d*s$/)).toBeVisible({ timeout: 20_000 })
+  })
+
+  test('cancel is honest about what it can interrupt', async ({ page }) => {
+    await gotoPicker(page)
+    await withSlowGeneration(page)
+    await page.getByRole('button', { name: 'LeetCode' }).click()
+    await page.getByRole('button', { name: 'Start' }).click()
+
+    const cancel = page.getByRole('button', { name: 'Cancel' })
+    await expect(cancel).toBeVisible({ timeout: 30_000 })
+    await cancel.click()
+    // A request already in flight to the model cannot be interrupted, so the
+    // button says so rather than appearing to hang.
+    await expect(page.getByText(/Waiting for the model to finish/)).toBeVisible()
+  })
+})

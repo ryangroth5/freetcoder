@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { GenerationProgress } from './GenerationProgress'
 import type {
   Difficulty,
   LibraryQuestion,
@@ -31,6 +32,7 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
   const [warnings, setWarnings] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [runId, setRunId] = useState<string | null>(null)
   const [source, setSource] = useState<'generate' | 'library' | 'own'>('generate')
   // Explicit rather than inferred: guessing intent from how much text someone
   // typed would be wrong often enough to be annoying.
@@ -71,14 +73,19 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
   }, [styleId, presetId, chosenTopics.join(','), freeform, difficulty])
 
   async function start() {
+    // Minted here so the progress panel can watch the request while it runs.
+    const id = crypto.randomUUID()
+    setRunId(id)
     setBusy(true)
     setError(null)
     try {
-      onStart(await api.createSession(selection))
+      onStart(await api.createSession({ ...selection, progress_id: id }))
     } catch (err) {
       setError((err as Error).message)
     } finally {
       setBusy(false)
+      // The log stays on screen after a failure: the attempt history is the
+      // most useful thing on the page at that moment.
     }
   }
 
@@ -249,11 +256,8 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
       >
         {busy ? 'Generating and validating…' : 'Start'}
       </button>
-      {busy && (
-        <p className="mt-2 text-xs text-[var(--color-muted)]">
-          Every question is executed against its own tests before you see it, so this
-          takes a few seconds.
-        </p>
+      {runId && (busy || error) && (
+        <GenerationProgress runId={runId} onCancelled={() => setBusy(false)} />
       )}
         </>
       )}

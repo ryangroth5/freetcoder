@@ -24,6 +24,7 @@ from ..models import (
     Signature,
     TestCase,
 )
+from ..progress import NULL_REPORTER, Reporter
 from ..runner import Limits, Verdict, check_syntax, get_adapter, run_python, run_source
 from .harness import (
     CaseResult,
@@ -431,8 +432,13 @@ def validate_question(
     *,
     language: Language = Language.PYTHON,
     languages: Sequence[Language] | None = None,
+    report_to: Reporter = NULL_REPORTER,
 ) -> GateReport:
-    """Run the full gate. Never raises; every failure is an outcome."""
+    """Run the full gate. Never raises; every failure is an outcome.
+
+    `report_to` is an observer: it defaults to a no-op, and nothing about the
+    verdict depends on it.
+    """
     sig = q.signature_for(language)
     if sig is None:
         return GateReport(
@@ -441,19 +447,26 @@ def validate_question(
         )
 
     offered_languages = list(languages or [language])
+    report_to(
+        "checking the starter code parses in "
+        + ", ".join(lang.value for lang in offered_languages)
+    )
     if (report := _check_scaffolds(q, offered_languages)) is not None:
         return report
 
     if (report := _check_constraints(q, list(q.visible_tests), "visible")) is not None:
         return report
 
+    report_to("running the reference against the examples in the statement")
     if (report := _check_reference_on_visible(q, sig)) is not None:
         return report
 
+    report_to("generating hidden test cases")
     cases, report = _materialise_hidden_cases(q)
     if report is not None:
         return report
 
+    report_to(f"computing expected answers for {len(cases)} hidden cases")
     hidden, reference_ms, report = _compute_oracle(sig, cases)
     if report is not None:
         return report
@@ -465,11 +478,16 @@ def validate_question(
     if (report := _check_magnitudes(hidden + list(q.visible_tests), offered)) is not None:
         return report
 
+    if q.brute_force_py or q.complexity_target:
+        report_to("checking a naive solution cannot pass")
     if (report := _check_brute_force_discriminates(q, sig, hidden)) is not None:
         return report
 
     timings: dict[str, int] = {language.value: reference_ms}
     if languages:
+        others = [lang.value for lang in languages if lang is not language]
+        if others:
+            report_to(f"checking the {' and '.join(others)} solutions agree")
         report = _check_other_languages(q, hidden, languages, language, timings)
         if report is not None:
             return report

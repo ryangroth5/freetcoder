@@ -22,6 +22,7 @@ from .formats import (
 from .library import QuestionLibrary
 from .llm import FakeLLM
 from .models import Difficulty, GatedQuestion, Language, TestCase
+from .progress import GenerationCancelled, Reporter, Run, registry
 from .scoring import QuestionScore, score_session
 from .service import (
     ExecutionReport,
@@ -69,6 +70,8 @@ class CreateSessionRequest(BaseModel):
     #: Prose describing a question to adapt. Distinct from `freeform`, which
     #: steers the topic within a generated question.
     import_text: str = Field(default="", max_length=MAX_IMPORT_CHARS)
+    #: A client-minted id for watching this request's progress while it runs.
+    progress_id: str | None = Field(default=None, max_length=64)
 
 
 class CaseInput(BaseModel):
@@ -197,12 +200,26 @@ async def create_session(request: Request, payload: CreateSessionRequest) -> dic
         )
 
     # Questions are generated lazily; only the first is needed to start.
-    obtained = await obtain_question(store, client, config, 0, language=payload.language)
+    reporter = Reporter(registry, payload.progress_id)
+    if payload.progress_id:
+        registry.start(payload.progress_id)
+
+    try:
+        obtained = await obtain_question(
+            store, client, config, 0,
+            language=payload.language, report_to=reporter,
+        )
+    except GenerationCancelled:
+        registry.finish(payload.progress_id, "cancelled")
+        raise HTTPException(409, "Generation cancelled.") from None
+
     if obtained is None:
+        registry.finish(payload.progress_id, "failed")
         raise HTTPException(
             502, "The model could not produce a question that passed validation. "
                  "Try again, or pick a different concentration.",
         )
+    registry.finish(payload.progress_id, "accepted")
     qid, _ = obtained
     sid = await store.create_session(config, [qid])
     return await get_session(request, sid)
@@ -388,6 +405,32 @@ async def skip(request: Request, sid: str, index: int) -> dict[str, Any]:
         source="", kind="skip", verdict="skipped", score=0.0,
     )
     return {"skipped": True, "reference_solution": _reference(gated)}
+
+
+# ---------------------------------------------------------------- progress
+@router.get("/progress/{run_id}", response_model=Run)
+async def get_progress(run_id: str) -> Run:
+    """What a generation in flight is doing.
+
+    Polled rather than streamed: the payload is tiny, it survives a reload, and
+    a second of latency is irrelevant against an operation measured in tens of
+    seconds.
+    """
+    run = registry.get(run_id)
+    if run is None:
+        raise HTTPException(404, "no such run")
+    return run
+
+
+@router.post("/progress/{run_id}/cancel")
+async def cancel_progress(run_id: str) -> dict[str, bool]:
+    """Ask a generation to stop.
+
+    Cooperative: the flag is checked between steps, so a request already in
+    flight to the model finishes first. The UI says so rather than appearing to
+    hang.
+    """
+    return {"cancelled": registry.cancel(run_id)}
 
 
 # ----------------------------------------------------------------- library

@@ -202,3 +202,82 @@ docker compose run --rm dev python -m freetcoder.generate \
 docker compose run --rm dev python -m freetcoder.generate \
     --style codility --import-file /srv/app/pasted.md -n 5
 ```
+
+---
+
+## The progress channel
+
+Generating a question takes tens of seconds, and with repair rounds, minutes.
+Before this, the UI said `Generating and validating…` and nothing else — no step,
+no elapsed time, and on failure a single sentence of apology.
+
+`GET /api/progress/{id}` now returns a log of what is actually happening:
+
+```
+·  asking the model for a question                          0.0s
+✓  validating "Counting Dogs"                               6.2s
+·  checking the starter code parses in python, javascript    6.2s
+·  running the reference against the examples                6.9s
+·  generating hidden test cases                              7.4s
+·  computing expected answers for 12 hidden cases            7.9s
+!  rejected: the javascript reference did not run: …         9.1s
+·  asking the model to fix the javascript solution           9.1s
+✓  repaired, and it now passes                              14.6s
+```
+
+### An observer, not a stage
+
+Generation is unchanged. `POST /api/sessions` is still synchronous, so there is
+no second code path to drift, and the reporter threaded through
+`obtain_question → generate_question → validate_question → repair_question`
+defaults to a no-op.
+
+That default is the design: **progress must never be able to affect whether a
+question is produced.** `test_gate.py` and `test_repair.py` needed no changes at
+all when this was added, which is the assertion that it worked.
+
+The client mints a `progress_id`, sends it with the request, and polls while the
+request is in flight.
+
+### Why polling
+
+The payload is tiny, it survives a reload, and there are no streaming edge cases
+to get wrong. A second of latency is irrelevant against a forty-second
+operation, and this project has lost enough time to transport subtleties
+(WebSocket framing, worker formats, service initialisation order) to prefer the
+boring option.
+
+The panel reads once immediately on mount rather than waiting a full interval:
+a fast generation would otherwise finish before anything was ever shown.
+
+### Why no percentage
+
+Attempts and repair rounds are unbounded, so any percentage would be invented,
+and a bar that stalls at 80% is worse than no bar. Elapsed time plus a truthful
+list of completed steps says more and claims less.
+
+### Diagnosis
+
+The log stays on screen after a failure, with the attempt history intact. The bug
+that blocked a real session — four attempts rejected identically because the
+gate's complaint was empty — would have been obvious here and was invisible
+without it.
+
+### Cancellation
+
+`POST /api/progress/{id}/cancel` sets a flag that the loop checks between
+attempts, repair rounds and gate steps. It cannot interrupt a request already in
+flight to the model, so the button says *"Waiting for the model to finish
+responding"* rather than appearing to hang.
+
+One subtlety: a cancel can arrive *before* the request it refers to, because the
+client mints the id then hits Start and Cancel in quick succession. `start()`
+preserves an existing cancelled flag rather than clobbering it, or that cancel
+would be silently ignored.
+
+### Bounded by construction
+
+Runs live in memory — progress is worthless once the request it describes has
+returned. The registry caps the number of runs, evicts finished ones on a TTL,
+and caps steps per run, because an in-memory store that grows forever is a slow
+leak in a container meant to run for days.

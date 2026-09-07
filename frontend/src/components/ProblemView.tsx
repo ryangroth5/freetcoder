@@ -6,13 +6,14 @@ import { EditorPane } from './EditorPane'
 import { ResultsPane } from './ResultsPane'
 import { StatementPane } from './StatementPane'
 import { Timer } from './Timer'
+import { GenerationProgress } from './GenerationProgress'
 
 export function ProblemView() {
   const {
     session, question, index, source, language, report, referenceSolution,
     busy, error, setSource, setLanguage, setReadEditor, run, submit, skip,
     loadQuestion, clearError, casesAreValid, publish, notice, clearNotice,
-    nextQuestion,
+    nextQuestion, runId,
   } = useStore()
   const [cursor, setCursor] = useState({ line: 1, column: 1 })
   const { resolved, toggle } = useTheme()
@@ -134,6 +135,12 @@ export function ProblemView() {
                         bg-[var(--color-fail)]/10 px-4 py-2 text-sm text-[var(--color-fail)]">
           {error}
           <button className="ml-auto text-xs underline" onClick={clearError}>dismiss</button>
+        </div>
+      )}
+
+      {runId && busy && (
+        <div className="border-b border-[var(--color-edge)] px-4 pb-3">
+          <GenerationProgress runId={runId} />
         </div>
       )}
 

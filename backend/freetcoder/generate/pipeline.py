@@ -22,6 +22,7 @@ from ..models import (
     GeneratedQuestion,
     Language,
 )
+from ..progress import NULL_REPORTER, Reporter
 from .gate import validate_question
 from .repair import repair_question
 
@@ -118,6 +119,17 @@ class GenerationResult:
         return self.question is not None
 
 
+def _accept(
+    result: GenerationResult,
+    question: GeneratedQuestion,
+    report: GateReport,
+    language: Language,
+    config: FormatConfig,
+) -> GenerationResult:
+    result.question = _gated(question, report, language, config)
+    return result
+
+
 def _gated(
     question: GeneratedQuestion,
     report: GateReport,
@@ -147,6 +159,7 @@ async def generate_question(
     repair_rounds: int = 3,
     tool_budget: int = 6,
     exclude_titles: list[str] | None = None,
+    report_to: Reporter = NULL_REPORTER,
 ) -> GenerationResult:
     """Produce one gate-approved question, or report why we could not.
 
@@ -160,32 +173,43 @@ async def generate_question(
     result = GenerationResult(question=None)
 
     for attempt in range(max_attempts):
+        report_to.checkpoint()
+        report_to(
+            "asking the model for a question"
+            if attempt == 0
+            else f"asking for a fresh question (attempt {attempt + 1})"
+        )
         try:
             candidate = await client.complete_json(
                 system=system, user=user, schema=GeneratedQuestion, temperature=0.8
             )
         except LLMError as exc:
+            report_to(f"the model did not answer usefully: {exc}"[:200], kind="warn")
             result.attempts.append(
                 GenerationAttempt(GateOutcome.SCHEMA_INVALID, str(exc)[:300])
             )
             continue
 
+        report_to(f"validating \u201c{candidate.title}\u201d", kind="ok")
+
         report = validate_question(
             candidate,
             language=language,
             languages=list(config.environment.languages),
+            report_to=report_to,
         )
         result.attempts.append(
             GenerationAttempt(report.outcome, report.detail[:300], candidate.title)
         )
 
         if report.accepted:
-            result.question = _gated(candidate, report, language, config)
-            return result
+            report_to("the question passed every check", kind="ok")
+            return _accept(result, candidate, report, language, config)
 
         log.info(
             "attempt %d rejected (%s): %s", attempt + 1, report.outcome.value, report.detail
         )
+        report_to(f"rejected: {report.detail}"[:300], kind="warn")
 
         # Try to fix what is broken before throwing the whole thing away.
         if repair_rounds > 0:
@@ -195,14 +219,15 @@ async def generate_question(
                 languages=list(config.environment.languages),
                 rounds=repair_rounds,
                 tool_budget=tool_budget,
+                report_to=report_to,
             )
             for outcome in history:
                 result.attempts.append(
                     GenerationAttempt(outcome, title=candidate.title, repaired=True)
                 )
             if repaired is not None:
-                result.question = _gated(repaired, final_report, language, config)
-                return result
+                report_to("repaired, and it now passes", kind="ok")
+                return _accept(result, repaired, final_report, language, config)
             report = final_report
         user = (
             f"{user}\n\n### Your previous attempt was rejected\n\n"

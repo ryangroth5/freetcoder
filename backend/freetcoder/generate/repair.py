@@ -27,6 +27,7 @@ from ..models import (
     Language,
     TestCase,
 )
+from ..progress import NULL_REPORTER, Reporter
 from .gate import validate_question
 from .tools import TOOL_SCHEMAS, dispatch
 
@@ -200,6 +201,21 @@ def build_repair_prompt(
     return "\n".join(parts)
 
 
+#: How each repair target reads in a progress log.
+_TARGET_LABEL: dict[str, str] = {
+    "reference": "{lang} solution",
+    "scaffold": "{lang} starter code",
+    "generator": "hidden-case generator",
+    "brute_force": "naive solution used to check the tests bite",
+    "visible_tests": "worked examples",
+    "constraints": "stated constraints",
+}
+
+
+def _describe(target: RepairTarget, language: Language) -> str:
+    return _TARGET_LABEL.get(target, target).format(lang=language.value)
+
+
 def _language_at_fault(report: GateReport, default: Language) -> Language:
     """Which language's artifact the gate complained about."""
     for lang in Language:
@@ -219,6 +235,7 @@ async def repair_question(
     languages: list[Language] | None = None,
     rounds: int = 3,
     tool_budget: int = 6,
+    report_to: Reporter = NULL_REPORTER,
 ) -> tuple[GeneratedQuestion | None, GateReport, list[GateOutcome]]:
     """Patch and re-gate until the question passes or the budget runs out.
 
@@ -235,7 +252,9 @@ async def repair_question(
             log.info("outcome %s is not patchable", current_report.outcome.value)
             break
 
+        report_to.checkpoint()
         at_fault = _language_at_fault(current_report, language)
+        report_to(f"asking the model to fix the {_describe(target, at_fault)}")
         try:
             patch = await client.complete_json_with_tools(
                 system=REPAIR_SYSTEM,
@@ -261,7 +280,7 @@ async def repair_question(
 
         current = candidate
         current_report = validate_question(
-            current, language=language, languages=languages
+            current, language=language, languages=languages, report_to=report_to
         )
         history.append(current_report.outcome)
         log.info(

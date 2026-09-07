@@ -79,6 +79,8 @@ interface State {
 
   /** Reads the editor's live text. Registered by EditorPane once it loads. */
   readEditor: (() => string) | null
+  /** Progress run for a generation in flight, if any. */
+  runId: string | null
 
   go: (screen: Screen) => void
   setSource: (source: string) => void
@@ -121,6 +123,7 @@ export const useStore = create<State>((set, get) => ({
   remaining: null,
   startedAt: Date.now(),
   readEditor: null,
+  runId: null,
   notice: null,
 
   go: (screen) => set({ screen }),
@@ -300,7 +303,8 @@ export const useStore = create<State>((set, get) => ({
       return
     }
 
-    set({ busy: true, error: null, notice: null })
+    const id = crypto.randomUUID()
+    set({ busy: true, error: null, notice: null, runId: id })
     try {
       // Carry the format, preset and concentration over so "next" means
       // "another one like this", not "start again".
@@ -310,8 +314,10 @@ export const useStore = create<State>((set, get) => ({
         preset: gen.preset_id || null,
         topics: gen.topics,
         freeform: gen.freeform,
+        progress_id: id,
       })
       await get().startSession(fresh)
+      set({ runId: null })
     } catch (err) {
       set({ error: (err as Error).message })
     } finally {

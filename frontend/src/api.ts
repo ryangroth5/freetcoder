@@ -187,6 +187,21 @@ export interface SetupState {
   has_key: boolean
 }
 
+export interface ProgressStep {
+  at: number
+  kind: 'info' | 'ok' | 'warn' | 'fail'
+  message: string
+}
+
+export interface ProgressRun {
+  id: string
+  started_at: number
+  steps: ProgressStep[]
+  finished: boolean
+  cancelled: boolean
+  outcome: string
+}
+
 export interface PickerSelection {
   style: string
   preset?: string | null
@@ -196,6 +211,8 @@ export interface PickerSelection {
   difficulty?: Difficulty | null
   /** Prose describing a question to adapt. Distinct from `freeform`. */
   import_text?: string
+  /** Client-minted id for watching this request's progress while it runs. */
+  progress_id?: string
 }
 
 export const api = {
@@ -228,6 +245,10 @@ export const api = {
       `/sessions/${id}/questions/${index}/skip`,
     ),
   results: (id: string) => request<SessionResults>(`/sessions/${id}/results`),
+
+  progress: (id: string) => request<ProgressRun>(`/progress/${id}`),
+  cancelProgress: (id: string) =>
+    post<{ cancelled: boolean }>(`/progress/${id}/cancel`),
 
   libraryStatus: () =>
     request<{ configured: boolean; reachable: boolean }>('/library/status'),

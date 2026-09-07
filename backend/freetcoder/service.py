@@ -11,6 +11,7 @@ from .formats import FormatConfig, Timing
 from .generate.harness import decode_results, encode_cases, values_equal
 from .llm import LLMClient
 from .models import GatedQuestion, Language, TestCase
+from .progress import NULL_REPORTER, Reporter
 from .runner import Limits, Verdict, get_adapter, run_source
 from .scoring import CaseOutcome, QuestionScore, score_question
 from .storage import Storage, cache_key
@@ -150,6 +151,7 @@ async def obtain_question(
     exclude_ids: list[str] | None = None,
     max_attempts: int = 4,
     repair_rounds: int | None = None,
+    report_to: Reporter = NULL_REPORTER,
 ) -> tuple[str, GatedQuestion] | None:
     """Generate a fresh question, falling back to the cache if that fails.
 
@@ -177,6 +179,7 @@ async def obtain_question(
                 settings.repair_rounds if repair_rounds is None else repair_rounds
             ),
             tool_budget=settings.tool_call_budget,
+            report_to=report_to,
         )
         if result.accepted and result.question is not None:
             qid = await store.cache_question(key, result.question)
