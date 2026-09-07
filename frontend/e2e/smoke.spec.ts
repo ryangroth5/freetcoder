@@ -170,3 +170,25 @@ test.describe('generation progress', () => {
     await expect(page.getByText(/Waiting for the model to finish/)).toBeVisible()
   })
 })
+
+test.describe('serving over plain http', () => {
+  // crypto.randomUUID exists only on secure origins, so it is there on
+  // localhost and gone when the container is reached at http://<host>:8080 --
+  // which is how everyone except the person running Docker sees it. It used to
+  // be called unguarded when starting a session, so Start threw and did
+  // nothing. Simulate the insecure context by removing it.
+  test('a session starts without crypto.randomUUID', async ({ page }) => {
+    await page.addInitScript(() => {
+      // @ts-expect-error deliberately removing it to mimic an insecure origin
+      delete Object.getPrototypeOf(globalThis.crypto).randomUUID
+      // @ts-expect-error same, for engines that define it as an own property
+      delete globalThis.crypto.randomUUID
+    })
+    await gotoPicker(page)
+    await page.getByRole('button', { name: 'LeetCode' }).click()
+    await page.getByRole('button', { name: 'Start' }).click()
+
+    await expect(page.getByRole('heading', { name: /Two Sum/ }))
+      .toBeVisible({ timeout: 90_000 })
+  })
+})

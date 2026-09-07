@@ -3,6 +3,7 @@
 import { create } from 'zustand'
 import { api } from './api'
 import type { CaseInput, Language, Question, RunReport, SessionInfo } from './api'
+import { randomId } from './id'
 
 /**
  * A case as held in the editor: every field is raw text so a half-typed value
@@ -341,7 +342,7 @@ export const useStore = create<State>((set, get) => ({
       return
     }
 
-    const id = crypto.randomUUID()
+    const id = randomId()
     set({ busy: true, error: null, notice: null, runId: id })
     try {
       // Carry the format, preset and concentration over so "next" means

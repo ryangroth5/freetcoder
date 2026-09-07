@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { randomId } from '../id'
 import { GenerationProgress } from './GenerationProgress'
 import type {
   Difficulty,
@@ -74,7 +75,7 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
 
   async function start() {
     // Minted here so the progress panel can watch the request while it runs.
-    const id = crypto.randomUUID()
+    const id = randomId()
     setRunId(id)
     setBusy(true)
     setError(null)
