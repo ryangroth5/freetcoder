@@ -449,6 +449,83 @@ copies of the Monaco API is the trap that produced a blank page in Phase C.
 
 ---
 
+# Phase J findings (syntax highlighting, root cause found, still unresolved)
+
+Both of Phase H's proposed next steps were tried. Both are closed. The cause is
+now understood, which is progress even though there is still no colour.
+
+## The extensions are not broken; nothing ever activates them
+
+The default-extension packages **do** contribute what we need. The python
+package's manifest carries:
+
+```js
+languages: [{ id: "python", extensions: [".py", ...] }]
+grammars:  [{ language: "python", scopeName: "source.python",
+              path: "./syntaxes/MagicPython.tmLanguage.json" }]
+```
+
+So Phase H's conclusion -- "the packages do not contribute their languages" --
+described the symptom correctly and the cause wrongly.
+
+Each package calls `registerExtension(...)` and exports a `whenReady()`. We
+imported them for side effects only and never awaited it. **Every one of those
+promises hangs forever** -- verified in-browser: all four report HUNG against an
+8-second race, and neither `.then` nor `.catch` ever fires.
+
+The reason is in `monaco-editor-wrapper/dist/vscode/services.js`. In `extended`
+mode it installs the TextMate and theme service overrides -- and no extensions
+service. `registerExtension` therefore queues a registration that nothing will
+ever process.
+
+Passing `getExtensionServiceOverride()` through `vscodeApiConfig.serviceOverrides`
+(the wrapper does merge ours, it starts from `serviceOverrides ?? {}`) is **not
+sufficient on its own**: the promises still hang. The likely remaining cause is
+that extension registration waits on a lifecycle phase that only a fuller
+workbench reaches, but that was not confirmed.
+
+## Grammars cannot be registered directly
+
+Phase H's step 1 was to bind a grammar to our manually-registered language
+without the extension. There is no API for it.
+`@codingame/monaco-vscode-textmate-service-override` exports exactly one thing:
+
+```ts
+export default function getServiceOverride(): IEditorOverrideServices
+```
+
+The TextMate service consumes grammars **only** through the extension
+contribution point. So grammars can arrive by one route, and that route is the
+one that hangs.
+
+## Why this was not shipped
+
+The obvious-looking change -- await `whenReady()` before creating models --
+makes things strictly worse. Waiting on a promise that never settles means the
+manual `monaco.languages.register` calls never run either, so
+`monaco.languages.getLanguages()` returns `["plaintext"]` alone, the language
+client's documentSelector matches nothing, and diagnostics stop.
+
+Colour is decoration; correct language identification is not. The eager manual
+registration stays.
+
+## Where to go next
+1. Find what `registerExtension`'s readiness actually awaits -- most likely
+   `ILifecycleService` reaching a phase that needs more of the workbench than
+   `extended` mode starts. If a modest set of extra service overrides gets
+   `whenReady()` to settle, everything else follows: the extension contributes
+   both the language and its grammar, and the manual registration becomes a
+   fallback for Go alone.
+2. Failing that, `classic` mode plus Monarch, accepting that the language client
+   needs `extended` -- so this means establishing whether the two can coexist,
+   which is a bigger question than colour.
+
+`window.__monaco` is exposed in dev builds for exactly this: it is how the
+registry was inspected from a Playwright probe, and how the "only plaintext is
+registered" fact was established.
+
+---
+
 # Phase I findings (models need files behind them)
 
 Switching to TypeScript surfaced:

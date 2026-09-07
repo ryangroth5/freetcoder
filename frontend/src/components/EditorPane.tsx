@@ -357,6 +357,9 @@ export function EditorPane({
         onLoad={(wrapper) => {
           if (import.meta.env.DEV) {
             ;(window as unknown as Record<string, unknown>).__wrapper = wrapper
+            // Exposed for debugging the language/grammar registry from the
+            // browser; see the Phase J notes in docs/container-discovery.md.
+            ;(window as unknown as Record<string, unknown>).__monaco = monaco
           }
           const editor = wrapper.getEditor()
           if (!editor) return
