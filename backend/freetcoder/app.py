@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     store = Storage(settings.db_path)
     await store.connect()
     app.state.store = store
+    # Saved settings must land before build_library, which reads library_url --
+    # applying them afterwards would leave a stale library client on every boot.
+    app.state.saved_settings = settings.apply_saved(await store.load_settings())
     app.state.llm = None
     app.state.library = build_library(settings)
     log.info("library: %s", settings.library_url or "not configured")

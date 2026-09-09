@@ -110,6 +110,16 @@ yet, and a flaky trust anchor costs more than three minutes.
   took 17 minutes instead of 3. `rm -rf frontend/node_modules/.vite` and restart
   `web`. Suspect this whenever the failures cluster in the editor and the run is
   suddenly far slower.
+- **Tests must never write to the running backend.** `gotoPicker` used to type a
+  key into the setup screen and click Continue, which POSTs to `/api/setup` and
+  reconfigures the real server for the life of the container. A developer's app
+  silently stopped asking for a key for a day because of it. The helper now
+  stubs `GET /api/setup` client-side, and `settings.spec.ts` carries a
+  regression guard asserting the backend still reports `configured: false`
+  after `gotoPicker` runs. Any new test that changes settings must stub the
+  write the same way.
+- `dev` and `prod` no longer share a data volume. They did, so browser runs
+  wrote cached questions into the database behind the app you practise against.
 - Playwright runs with `workers: 1`. Submissions execute real code in a shared
   sandbox on a memory-constrained VM, so this has the same hazards as the
   backend parallelism above.

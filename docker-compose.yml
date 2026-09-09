@@ -17,7 +17,10 @@ services:
     volumes:
       - ./backend:/srv/app/backend:ro
       - ./library:/srv/app/library:ro
-      - freetcoder-data:/data
+      # Its OWN volume, not prod's. The browser suite writes cached questions
+      # and settings through this service, and those writes have no business
+      # reaching the database behind the app you actually practise against.
+      - freetcoder-dev-data:/data
     environment:
       PYTHONPATH: /srv/app/backend
       FREETCODER_DB_PATH: /data/freetcoder.db
@@ -89,5 +92,6 @@ services:
 
 volumes:
   freetcoder-data:
+  freetcoder-dev-data:
   freetcoder-library:
   freetcoder-node-modules:

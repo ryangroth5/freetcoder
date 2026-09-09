@@ -13,7 +13,7 @@ export function ProblemView() {
     session, question, index, source, language, report, referenceSolution,
     busy, error, setSource, setLanguage, setReadEditor, run, submit, skip,
     loadQuestion, clearError, casesAreValid, publish, notice, clearNotice,
-    nextQuestion, runId,
+    nextQuestion, runId, openSettings,
   } = useStore()
   const [cursor, setCursor] = useState({ line: 1, column: 1 })
   const { resolved, toggle } = useTheme()
@@ -72,6 +72,15 @@ export function ProblemView() {
                   className="rounded bg-[var(--color-pass)] px-3 py-1 text-sm font-medium
                              text-white disabled:opacity-40">
             Submit
+          </button>
+          <button
+            onClick={openSettings}
+            aria-label="Settings"
+            title="Settings"
+            className="rounded border border-[var(--color-edge)] px-2 py-1 text-sm
+                       text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+          >
+            ⚙
           </button>
           <button
             onClick={toggle}

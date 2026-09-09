@@ -189,6 +189,19 @@ export interface SetupState {
   has_key: boolean
 }
 
+export interface AppSettings {
+  values: Record<string, string | number | boolean>
+  /** field -> 'environment' | 'saved' | 'default' */
+  sources: Record<string, string>
+  /** False when the database is in memory: saves will not survive a restart. */
+  persistent: boolean
+  db_path: string
+  has_key: boolean
+  /** Last four characters of the key, or ''. The key itself never leaves the server. */
+  key_hint: string
+  configured: boolean
+}
+
 export interface ProgressStep {
   at: number
   kind: 'info' | 'ok' | 'warn' | 'fail'
@@ -240,6 +253,14 @@ export const api = {
   getSetup: () => request<SetupState>('/setup'),
   saveSetup: (payload: { base_url?: string; api_key?: string; model?: string }) =>
     post<SetupState>('/setup', payload),
+
+  getSettings: () => request<AppSettings>('/settings'),
+  saveSettings: (patch: Record<string, string | number | boolean>) =>
+    request<AppSettings>('/settings', {
+      method: 'PUT', body: JSON.stringify(patch),
+    }),
+  resetSetting: (field: string) =>
+    request<AppSettings>(`/settings/${field}`, { method: 'DELETE' }),
 
   formats: () => request<StyleInfo[]>('/formats'),
   topics: () => request<{ topics: string[]; unsupported: Record<string, string> }>('/topics'),

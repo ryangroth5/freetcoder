@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at     REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id, question_index);
+
+-- User-editable settings, one row per field, values JSON-encoded.
+-- Key/value rather than one row of columns: a new setting then never needs a
+-- migration, and an absent row means "never set", which is what lets the
+-- settings page tell an explicit choice apart from a default.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,   -- JSON-encoded scalar
+    updated_at REAL NOT NULL
+);
 """
 
 
@@ -105,7 +115,32 @@ class Storage:
         self._db = await aiosqlite.connect(self._dsn, uri=self._uri)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
+        await self._migrate()
         await self._db.commit()
+
+    async def _migrate(self) -> None:
+        """Add columns a database created by an older version lacks.
+
+        CREATE TABLE IF NOT EXISTS does nothing to an *existing* table, and the
+        data volume is durable -- so a column added later silently produces
+        "no such column" errors against every database that predates it. The
+        library service hit exactly that; this borrows its fix before we repeat
+        it. Empty tuples are the normal state: the cost of keeping this is one
+        PRAGMA per boot.
+        """
+        migrations: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+            ("questions", ()),
+            ("sessions", ()),
+            ("app_settings", ()),
+        )
+        for table, columns in migrations:
+            cur = await self.db.execute(f"PRAGMA table_info({table})")
+            existing = {row["name"] for row in await cur.fetchall()}
+            for column, ddl in columns:
+                if column not in existing:
+                    await self.db.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
+                    )
 
     async def close(self) -> None:
         if self._db is not None:
@@ -117,6 +152,32 @@ class Storage:
         if self._db is None:
             raise RuntimeError("Storage.connect() was never awaited")
         return self._db
+
+    # ----------------------------------------------------------- settings
+    async def load_settings(self) -> dict[str, str]:
+        """Every saved setting, as raw JSON text keyed by field name.
+
+        Decoding is the caller's job: storage has no opinion about what a
+        setting means, and the field types live on Settings.
+        """
+        cur = await self.db.execute("SELECT key, value FROM app_settings")
+        return {row["key"]: row["value"] for row in await cur.fetchall()}
+
+    async def save_settings(self, values: dict[str, str]) -> None:
+        """Upsert raw JSON values in one transaction."""
+        now = time.time()
+        await self.db.executemany(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            [(k, v, now) for k, v in values.items()],
+        )
+        await self.db.commit()
+
+    async def delete_setting(self, key: str) -> None:
+        """Forget a saved setting, so the environment value applies again."""
+        await self.db.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        await self.db.commit()
 
     # ---------------------------------------------------------- questions
     async def cache_question(self, key: str, question: GatedQuestion) -> str:

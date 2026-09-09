@@ -2,6 +2,7 @@
 
 import { create } from 'zustand'
 import { api } from './api'
+import { readDefaultLanguage } from './prefs'
 import type { CaseInput, Language, Question, RunReport, SessionInfo } from './api'
 import { randomId } from './id'
 
@@ -60,10 +61,11 @@ function toInput(c: EditableCase): CaseInput {
   }
 }
 
-export type Screen = 'setup' | 'picker' | 'problem' | 'results'
+export type Screen = 'setup' | 'picker' | 'problem' | 'results' | 'settings'
 
 interface State {
   screen: Screen
+  returnTo: Screen
   session: SessionInfo | null
   question: Question | null
   index: number
@@ -86,6 +88,9 @@ interface State {
   runId: string | null
 
   go: (screen: Screen) => void
+  /** Opens settings remembering where to come back to. */
+  openSettings: () => void
+  closeSettings: () => void
   setSource: (source: string) => void
   setLanguage: (language: Language) => void
   setReadEditor: (read: (() => string) | null) => void
@@ -113,10 +118,11 @@ interface State {
 
 export const useStore = create<State>((set, get) => ({
   screen: 'setup',
+  returnTo: 'picker',
   session: null,
   question: null,
   index: 0,
-  language: 'python',
+  language: readDefaultLanguage(),
   source: '',
   sources: {},
   cases: [],
@@ -131,6 +137,11 @@ export const useStore = create<State>((set, get) => ({
   notice: null,
 
   go: (screen) => set({ screen }),
+
+  // Settings is a detour, not a destination: leaving must land you back where
+  // you were, with the session untouched (it lives in this store, so it is).
+  openSettings: () => set((st) => ({ screen: 'settings', returnTo: st.screen })),
+  closeSettings: () => set((st) => ({ screen: st.returnTo })),
   setReadEditor: (readEditor) => set({ readEditor }),
 
   updateCase: (id, patch) =>

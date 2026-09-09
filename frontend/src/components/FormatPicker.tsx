@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { useStore } from '../store'
 import { randomId } from '../id'
 import { GenerationProgress } from './GenerationProgress'
 import type {
@@ -92,7 +93,17 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
 
   return (
     <div className="mx-auto max-w-3xl p-8">
-      <h1 className="text-2xl font-semibold">What would you like to practise?</h1>
+      <div className="flex items-baseline gap-4">
+        <h1 className="text-2xl font-semibold">What would you like to practise?</h1>
+        <button
+          onClick={useStore.getState().openSettings}
+          aria-label="Settings"
+          className="ml-auto text-sm text-[var(--color-muted)] underline
+                     hover:text-[var(--color-ink)]"
+        >
+          ⚙ Settings
+        </button>
+      </div>
 
       <div className="mt-5 flex gap-2">
         <Choice selected={source === 'generate'} onClick={() => setSource('generate')}>

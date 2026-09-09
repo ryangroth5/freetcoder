@@ -1,6 +1,7 @@
 import { FormatPicker } from './components/FormatPicker'
 import { ProblemView } from './components/ProblemView'
 import { ResultsScreen } from './components/ResultsScreen'
+import { SettingsScreen } from './components/SettingsScreen'
 import { SetupScreen } from './components/SetupScreen'
 import { useStore } from './store'
 
@@ -18,5 +19,7 @@ export default function App() {
       return <ProblemView />
     case 'results':
       return <ResultsScreen />
+    case 'settings':
+      return <SettingsScreen />
   }
 }

@@ -41,5 +41,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Only src/. Without this vitest also collects e2e/, whose Playwright
+    // `test()` calls are a different runner and fail at import.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
 })

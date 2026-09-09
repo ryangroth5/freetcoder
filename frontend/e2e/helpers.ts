@@ -4,34 +4,34 @@ import type { Page } from '@playwright/test'
 /**
  * Reach the format picker from a cold load.
  *
- * The API key lives in server process memory, so whether the setup screen
- * appears depends on what has already run. Worse, it can be visible at the
- * moment we check and gone a tick later, once GET /api/setup resolves and the
- * app skips ahead — so a plain isVisible() check races and fill() throws.
- * Attempt the fill, tolerate it failing, and assert only on the destination.
+ * Stubs GET /api/setup rather than filling in a key. The helper used to type
+ * 'test-key' and click Continue, which POSTs to the real backend and mutates
+ * its in-memory settings -- so every browser run silently reconfigured the
+ * developer's server, and it stayed that way until the container was recreated.
+ * A test suite must not write to the thing it is testing.
+ *
+ * Stubbing also removes the race this helper used to work around: the setup
+ * screen could be visible when we looked and gone a tick later, because
+ * whether it appeared depended on what had already run.
+ *
+ * Session creation still works unconfigured: it only fails when the FakeLLM is
+ * *exhausted*, and FREETCODER_FAKE_LLM=1 builds one that cycles.
  */
 export async function gotoPicker(page: Page): Promise<void> {
+  await page.route('**/api/setup', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        base_url: 'https://openrouter.ai/api/v1',
+        model: 'test-model',
+        has_key: true,
+      },
+    }))
   await page.goto('/')
-
-  const key = page.getByPlaceholder('sk-or-...')
-  const leetcode = page.getByRole('button', { name: 'LeetCode' })
-
-  await Promise.race([
-    key.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => undefined),
-    leetcode.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => undefined),
-  ])
-
-  if (!(await leetcode.isVisible().catch(() => false))) {
-    await key.fill('test-key', { timeout: 5_000 }).catch(() => undefined)
-    await page.getByRole('button', { name: 'Continue' })
-      .click({ timeout: 5_000 })
-      .catch(() => undefined)
-  }
-
-  await expect(leetcode).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('button', { name: 'LeetCode' }))
+    .toBeVisible({ timeout: 30_000 })
 }
 
-/** Start a LeetCode session and wait for the generated question to render. */
 export async function startLeetCodeSession(page: Page): Promise<void> {
   await gotoPicker(page)
   await page.getByRole('button', { name: 'LeetCode' }).click()

@@ -21,7 +21,7 @@ from .formats import (
     resolve,
     unsupported_topics,
 )
-from .library import QuestionLibrary
+from .library import QuestionLibrary, build_library
 from .llm import FakeLLM
 from .models import Difficulty, GatedQuestion, Language, TestCase
 from .progress import GenerationCancelled, Reporter, Run, registry
@@ -33,7 +33,12 @@ from .service import (
     obtain_question,
     remaining_seconds,
 )
-from .settings import get_settings
+from .settings import (
+    SETTABLE,
+    environment_defaults,
+    from_environment,
+    get_settings,
+)
 from .storage import Storage
 from .tutor import (
     SYSTEM_PROMPT,
@@ -55,6 +60,48 @@ class SetupState(BaseModel):
     base_url: str
     model: str
     has_key: bool
+
+
+class SettingsPatch(BaseModel):
+    """A partial update. Every field optional; only what is sent is changed.
+
+    The bounds matter more than they look. Settings itself has none, and this
+    API is unauthenticated -- without them a single PUT of
+    generation_attempts=100000 is a way to spend someone else's money.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    llm_base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    llm_model: str | None = Field(default=None, min_length=1, max_length=200)
+    llm_timeout_s: float | None = Field(default=None, gt=0, le=600)
+    llm_max_retries: int | None = Field(default=None, ge=0, le=10)
+    generation_attempts: int | None = Field(default=None, ge=1, le=10)
+    repair_rounds: int | None = Field(default=None, ge=0, le=10)
+    tool_call_budget: int | None = Field(default=None, ge=0, le=32)
+    check_statement_sufficiency: bool | None = None
+    tutor_tool_budget: int | None = Field(default=None, ge=0, le=32)
+    tutor_message_cap: int | None = Field(default=None, ge=1, le=500)
+    library_url: str | None = Field(default=None, max_length=500)
+
+
+class SettingsState(BaseModel):
+    """Everything the settings page needs, and nothing secret.
+
+    `values` carries the effective setting; `sources` says whether each came
+    from the environment or was saved here, so "Reset to environment" can be
+    offered only where it would do something.
+    """
+
+    values: dict[str, Any]
+    sources: dict[str, str]          # field -> 'environment' | 'saved' | 'default'
+    #: False when the database is in-memory, so saves will not survive a restart.
+    persistent: bool
+    db_path: str
+    #: The key is environment-only; these describe it without revealing it.
+    has_key: bool
+    key_hint: str                    # last four characters, or ''
+    configured: bool
 
 
 class StyleInfo(BaseModel):
@@ -162,6 +209,87 @@ async def post_setup(
         s.llm_api_key = key
     request.app.state.llm = None  # force a rebuild with the new settings
     return await get_setup()
+
+
+# ---------------------------------------------------------------- settings
+def _settings_state(request: Request) -> SettingsState:
+    s = get_settings()
+    saved: set[str] = getattr(request.app.state, "saved_settings", set())
+    key = s.llm_api_key
+    return SettingsState(
+        values={name: getattr(s, name) for name in sorted(SETTABLE)},
+        sources={
+            name: "saved" if name in saved
+            else "environment" if from_environment(name)
+            else "default"
+            for name in sorted(SETTABLE)
+        },
+        persistent=bool(s.db_path),
+        db_path=s.db_path,
+        has_key=bool(key),
+        key_hint=key[-4:] if len(key) >= 4 else "",
+        configured=s.configured,
+    )
+
+
+@router.get("/settings", response_model=SettingsState)
+async def get_app_settings(request: Request) -> SettingsState:
+    return _settings_state(request)
+
+
+@router.put("/settings", response_model=SettingsState)
+async def put_app_settings(
+    request: Request, patch: SettingsPatch
+) -> SettingsState:
+    """Apply and persist a partial settings update.
+
+    Saving still works with an in-memory database -- the change applies for the
+    process lifetime, which is genuinely useful. Silently discarding what
+    someone typed would be worse; the response says `persistent: false` and the
+    page tells them.
+    """
+    s = get_settings()
+    changes = patch.model_dump(exclude_none=True)
+    if not changes:
+        return _settings_state(request)
+
+    library_changed = (
+        "library_url" in changes and changes["library_url"] != s.library_url
+    )
+    for name, value in changes.items():
+        setattr(s, name, value)
+
+    store = request.app.state.store
+    if s.db_path:
+        await store.save_settings(
+            {k: json.dumps(v) for k, v in changes.items()}
+        )
+    saved: set[str] = getattr(request.app.state, "saved_settings", set())
+    request.app.state.saved_settings = saved | set(changes)
+
+    # Two clients read these, not one. The LLM client is rebuilt lazily via
+    # this null; the library client is otherwise only ever built in lifespan,
+    # so without this a library_url change is inert until restart.
+    request.app.state.llm = None
+    if library_changed:
+        request.app.state.library = build_library(s)
+    return _settings_state(request)
+
+
+@router.delete("/settings/{field}", response_model=SettingsState)
+async def reset_app_setting(request: Request, field: str) -> SettingsState:
+    """Forget a saved value so the environment (or the default) applies again."""
+    if field not in SETTABLE:
+        raise HTTPException(404, f"unknown setting {field!r}")
+    s = get_settings()
+    await request.app.state.store.delete_setting(field)
+    setattr(s, field, environment_defaults()[field])
+    saved: set[str] = getattr(request.app.state, "saved_settings", set())
+    request.app.state.saved_settings = saved - {field}
+    request.app.state.llm = None
+    if field == "library_url":
+        request.app.state.library = build_library(s)
+    return _settings_state(request)
 
 
 # ----------------------------------------------------------------- formats

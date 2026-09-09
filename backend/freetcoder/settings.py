@@ -2,10 +2,38 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger(__name__)
+
+#: Fields the settings page may write, and which are persisted.
+#:
+#: Everything absent from this set is refused over HTTP. `db_path` and
+#: `static_dir` would be a file-disclosure primitive on an unauthenticated API;
+#: `fake_llm` would let a caller silently swap the real model for canned
+#: fixtures; `llm_api_key` is environment-only on purpose -- see the note on
+#: the field itself.
+SETTABLE: frozenset[str] = frozenset({
+    "llm_base_url",
+    "llm_model",
+    "llm_timeout_s",
+    "llm_max_retries",
+    "generation_attempts",
+    "repair_rounds",
+    "tool_call_budget",
+    "check_statement_sufficiency",
+    "tutor_tool_budget",
+    "tutor_message_cap",
+    "library_url",
+})
 
 
 class Settings(BaseSettings):
@@ -13,6 +41,12 @@ class Settings(BaseSettings):
 
     #: Any OpenAI-compatible endpoint: OpenRouter, Ollama, vLLM, LM Studio.
     llm_base_url: str = "https://openrouter.ai/api/v1"
+    #: Environment-only, never persisted and never returned by the API.
+    #:
+    #: Put it in a .env file, which compose already substitutes. Keeping the
+    #: credential out of the database means the settings API cannot be turned
+    #: into an exfiltrator by repointing llm_base_url at a hostile host, and
+    #: nothing lands in plaintext on a mounted volume.
     llm_api_key: str = ""
     llm_model: str = "anthropic/claude-sonnet-4.5"
     llm_timeout_s: float = 120.0
@@ -58,6 +92,58 @@ class Settings(BaseSettings):
     def configured(self) -> bool:
         """False until the user supplies a key on the setup screen."""
         return bool(self.llm_api_key and self.llm_base_url)
+
+    def apply_saved(self, raw: dict[str, str]) -> set[str]:
+        """Overlay JSON-encoded saved values; returns the fields that took.
+
+        A saved value beats the environment. The reverse rule is defensible in
+        general -- environment is the operator's channel -- but not here:
+        docker-compose sets FREETCODER_LLM_BASE_URL and FREETCODER_LLM_MODEL
+        unconditionally, so env-wins would lock the two fields this page most
+        exists to edit in every Docker deployment.
+
+        A value that no longer coerces (a renamed field, a type changed between
+        versions) is skipped with a log line. Refusing to boot because an old
+        row is unreadable would be a worse failure than ignoring it.
+        """
+        applied: set[str] = set()
+        for name, encoded in raw.items():
+            if name not in SETTABLE:
+                log.warning("ignoring saved setting %r: not settable", name)
+                continue
+            try:
+                value: Any = TypeAdapter(
+                    type(self).model_fields[name].annotation
+                ).validate_python(json.loads(encoded))
+            except (ValidationError, ValueError, KeyError) as err:
+                log.warning("ignoring saved setting %r: %s", name, err)
+                continue
+            setattr(self, name, value)
+            applied.add(name)
+        return applied
+
+
+def env_name(field: str) -> str:
+    """The environment variable a field reads from."""
+    return f"FREETCODER_{field.upper()}"
+
+
+def from_environment(field: str) -> bool:
+    """Whether this field has a non-empty value in the environment.
+
+    Non-empty, not merely present: compose writes `${VAR:-}` for several
+    fields, so a presence check would report every one of them as set.
+    """
+    return bool(os.environ.get(env_name(field), "").strip())
+
+
+def environment_defaults() -> dict[str, Any]:
+    """A Settings built from the environment alone, ignoring anything saved.
+
+    Used to answer "what would this field be if I forgot the saved value?",
+    which is what the settings page's Reset offers.
+    """
+    return Settings().model_dump()
 
 
 @lru_cache

@@ -14,8 +14,14 @@ configure.
 
 ```bash
 git clone <this repo> && cd freetcoder
-FREETCODER_LLM_API_KEY=sk-or-... make dev
+cp .env.example .env        # then put your key in it
+make dev
 ```
+
+The key goes in `.env` and nowhere else. It is deliberately the one setting
+that is never stored in the database: keeping the credential out of the app's
+own data means the settings API cannot be turned into an exfiltrator by
+repointing the endpoint at a hostile host.
 
 Then open **http://localhost:5173**.
 
@@ -55,11 +61,22 @@ enter them on the app's setup screen.
 | Variable | Default | Notes |
 |---|---|---|
 | `FREETCODER_LLM_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter, Ollama, vLLM, LM Studio… |
-| `FREETCODER_LLM_API_KEY` | *(empty)* | Held in process memory; never written to disk |
+| `FREETCODER_LLM_API_KEY` | *(empty)* | Put it in `.env`. Never persisted, never returned by the API |
 | `FREETCODER_LLM_MODEL` | `anthropic/claude-sonnet-4.5` | |
 | `FREETCODER_DB_PATH` | *(empty → in-memory)* | Set to `/data/freetcoder.db` with a volume |
 | `FREETCODER_FAKE_LLM` | `0` | `1` serves recorded questions; no key or network needed |
 | `FREETCODER_LIBRARY_URL` | *(empty)* | Question library service; empty disables save/browse |
+
+Everything except the key is also editable at runtime from the **Settings**
+page (the gear on the picker or the problem header), and a value saved there
+wins over the environment — because a settings page whose fields silently do
+nothing is worse than no settings page. Each field shows its source, and
+*Reset* returns it to the environment value.
+
+Server settings persist in the SQLite database, so they need a volume;
+`FREETCODER_DB_PATH` empty means in-memory and the page says so rather than
+pretending. Theme and default language are stored per browser instead, so two
+people sharing a container do not overwrite each other.
 
 **Local models.** Point the base URL at `http://host.docker.internal:11434/v1`
 for Ollama and use any non-empty key. Smaller models often fail the solvability
@@ -234,6 +251,7 @@ backend/freetcoder/
 frontend/src/  React + Monaco + the three-tier picker
 docs/container-discovery.md   why the Dockerfile and build config look like this
 docs/testing.md               the four suites, what they cost, and what e2e-prod caught
+docs/question-generation.md   how a question is generated, gated and repaired
 ```
 
 **Read `docs/container-discovery.md` before changing the Dockerfile, the runner,
