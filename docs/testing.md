@@ -120,6 +120,26 @@ yet, and a flaky trust anchor costs more than three minutes.
   write the same way.
 - `dev` and `prod` no longer share a data volume. They did, so browser runs
   wrote cached questions into the database behind the app you practise against.
+- **A whole suite failing on the picker means the backend is wedged, not broken
+  code.** `dev` runs uvicorn with `--reload`; its worker can die while the
+  container still reports `Up`, leaving a defunct child in `ps` and nothing
+  listening. `docker compose up -d` will not fix it -- the container already
+  exists with unchanged config, so compose leaves it alone. Use
+  `docker compose up -d --force-recreate dev`.
+
+  The signature: the picker renders but the style buttons are missing (the
+  page shows "1. Assessment style" with nothing under it and Start disabled),
+  and every session test times out at 30s, so the run takes ~26 minutes and
+  only the two tests that never call the API pass. Check it in one command
+  before theorising:
+
+  ```
+  docker compose exec -T web node -e 'fetch("http://dev:8080/api/formats").then(r=>r.status).then(console.log)'
+  ```
+
+  Query from inside `web`, not the host: a host-side `curl localhost:8081` can
+  time out through port forwarding while the backend is perfectly healthy, which
+  is a false signal in both directions.
 - Playwright runs with `workers: 1`. Submissions execute real code in a shared
   sandbox on a memory-constrained VM, so this has the same hazards as the
   backend parallelism above.

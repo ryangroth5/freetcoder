@@ -599,3 +599,121 @@ currently on screen" -- it just made it observable.
 A superseded `createModelReference` rejects with `Canceled`. Unhandled, it
 surfaces as a page error. Superseded opens are expected, so they are swallowed
 by name and anything else is logged.
+
+# Phase K findings (syntax highlighting: root cause found and proven)
+
+Phase J concluded "the barrier never opens". **That was wrong**, and so was its
+dismissal of module duplication. Both were corrected by instrumenting
+`monaco-vscode-api/lifecycle.js` directly in `node_modules` and reading the
+browser console.
+
+## The barrier opens fine
+
+Patching `startup()` to log each stage shows it running to completion:
+
+```
+BARRIER enter pre=2 main=1 post=1
+BARRIER stage1 pre-participants done
+BARRIER stage2 hover done
+BARRIER stage3 main-participants done
+BARRIER stage4 post-participants done
+BARRIER OPENED
+```
+
+So no participant stalls. Phase J's proposed next step was chasing a
+non-problem.
+
+## There are two module instances, and only one opens
+
+Tagging the module with a random id at import time is decisive:
+
+```
+BARRIER module instance oe0udy      <- prebundled; startup() runs here
+BARRIER module instance 2qlx9t      <- raw source; the extensions wait here
+BARRIER wait on instance 2qlx9t open=false   (x4: python, js, ts, theme)
+BARRIER OPENED on instance oe0udy
+```
+
+Phase J ruled duplication out by counting directories in `node_modules` — there
+is exactly one `@codingame/monaco-vscode-api`. That was the wrong measurement.
+The duplication is not two copies on disk; it is **Vite creating two module
+instances** across the `optimizeDeps` boundary. The four grammar packages were
+excluded from prebundling (to dodge an esbuild OOM) while `monaco-vscode-api`
+was prebundled, so the excluded packages import the raw `lifecycle.js` and
+everything else gets the prebundled one.
+
+That is the whole reason syntax highlighting never worked. Every `whenReady()`
+awaits a `Barrier` that nothing will ever open, so no extension is ever
+registered, so no grammar exists to tokenize with.
+
+## Removing the exclusions fixes it, and reveals what is behind it
+
+With `optimizeDeps.exclude` emptied — one instance for everything, and no
+esbuild OOM:
+
+```
+HLPROBE ourBarrier ok
+HLPROBE pythonExt ok
+languages: ["plaintext","python","javascript","typescript","go"]
+languageId: "python"
+```
+
+`whenReady()` resolves for the first time, and the extensions contribute their
+languages, exactly as their manifests always said they would. Manual
+`monaco.languages.register` becomes unnecessary.
+
+Tokens are still `mtk1`, now for two further reasons, both concrete:
+
+1. **Prebundling breaks the packages' own resource URLs.** They register files
+   with `new URL('./resources/x.json', import.meta.url)`, which after
+   prebundling points into `node_modules/.vite/deps`, where the resources are
+   not. Observed as `Unable to load
+   extension-file://vscode.theme-defaults/extension/themes/light_modern.json`
+   and 404s for `.vite/deps/resources/package.nls.json`. TextMate produces
+   *scopes*; without a theme to map them, everything renders as default text.
+2. **The TextMate tokenizer has no worker.** The production build (which does
+   not prebundle, so its resource URLs resolve) gets past the first problem and
+   fails with `Unimplemented worker TextMateWorker (workerMain.js)`.
+   `monaco-languageclient`'s `useWorkerFactory` throws for any label absent
+   from `workerLoaders`, and only `TextEditorWorker` is wired.
+
+## What was tried and does not work
+
+- **Excluding the whole family** (so nothing is prebundled and
+  `import.meta.url` keeps working) hits a cascade of CommonJS interop failures —
+  `vscode-languageclient`, then `vscode-jsonrpc`, then
+  `vscode-languageserver-protocol` — each needing an `optimizeDeps.include`, and
+  it ends with the barrier hanging and no editor at all. Worse than the start.
+- **`enableExtHostWorker: true`** leaves the editor entirely unrendered.
+- **Registering a grammar directly** is impossible:
+  `@codingame/monaco-vscode-textmate-service-override` exports only
+  `getServiceOverride()`, and grammars reach it solely through the extension
+  contribution point.
+
+## Where to go next
+
+Prebundle everything (single instance), then solve the two known problems:
+
+1. Register the extensions' resources through *our* module graph rather than
+   theirs, with `?url` imports so Vite resolves them in both dev and build.
+   That is ~20 files across the four packages: grammars,
+   language-configuration, snippets and `package.nls.json` each need a
+   `registerFileUrl`, with the manifest copied from the package's `index.js`.
+   A partial version of this for themes alone worked as far as it went.
+2. Add `TextMateWorker` to `workerLoaders` via the wrapper's
+   `monacoWorkerFactory`. The worker exists at
+   `@codingame/monaco-vscode-textmate-service-override/worker`; wiring it
+   naively broke the dev server, so it needs care with the worker URL form.
+
+Both are mechanical rather than exploratory. The unknown that made this
+intractable — why nothing registered — is answered.
+
+**Method note.** What broke this open was instrumenting the dependency in
+`node_modules` and tagging the module instance, not reading more source. Two
+Phase J conclusions were confidently wrong because they rested on inspecting
+files rather than observing the running program. `window.__monaco` is exposed
+in dev builds for this reason; restore `lifecycle.js` from its `.bak` when done,
+and expect to clear `node_modules/.vite` and reload twice after any change to
+prebundling.
+
+---
