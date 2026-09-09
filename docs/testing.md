@@ -140,6 +140,20 @@ yet, and a flaky trust anchor costs more than three minutes.
   Query from inside `web`, not the host: a host-side `curl localhost:8081` can
   time out through port forwarding while the backend is perfectly healthy, which
   is a false signal in both directions.
+- **Recreate `prod` without `FREETCODER_FAKE_LLM` when the run finishes.** Both
+  browser suites need the flag, so it gets set on the container -- and left
+  there, where it silently serves recorded questions to whoever is actually
+  using the app. This reached the running app three times before it was
+  noticed, because a key can be set and valid while every question comes from a
+  fixture. The status badge now makes it visible, but the tidy-up is still the
+  fix:
+
+  ```
+  docker compose --profile prod up -d --force-recreate prod   # no flag
+  ```
+
+  Confirm with `GET /api/settings`: `llm_status` should be `live` or
+  `unconfigured`, never `offline`, on a container you intend to use.
 - Playwright runs with `workers: 1`. Submissions execute real code in a shared
   sandbox on a memory-constrained VM, so this has the same hazards as the
   backend parallelism above.
