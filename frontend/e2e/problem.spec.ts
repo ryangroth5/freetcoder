@@ -436,3 +436,49 @@ test.describe('compute expected', () => {
     await expect(page.getByText('expected (computed)')).toBeVisible({ timeout: 30_000 })
   })
 })
+
+test.describe('syntax highlighting', () => {
+  // Monaco renders each token as <span class="mtkN">, where N indexes the
+  // theme's colours. One distinct class across the whole buffer means nothing
+  // is tokenized -- which was true of this project for its entire life, because
+  // Vite's optimizeDeps boundary split monaco-vscode-api into two module
+  // instances and every extension's whenReady() hung. See Phase K in
+  // docs/container-discovery.md.
+  //
+  // Asserting on class *variety* rather than specific colours keeps this from
+  // breaking when the theme changes.
+  test('python is tokenized into more than one colour', async ({ page }) => {
+    await startLeetCodeSession(page)
+
+    await expect.poll(async () => page.evaluate(() => {
+      const classes = new Set<string>()
+      for (const el of document.querySelectorAll('.view-line span span')) {
+        for (const c of el.className.split(/\s+/)) {
+          if (/^mtk\d+$/.test(c)) classes.add(c)
+        }
+      }
+      return classes.size
+    }), { timeout: 30_000 }).toBeGreaterThan(1)
+  })
+
+  test('the grammars do not cost us the language server', async ({ page }) => {
+    // The manual language registration exists so a model never resolves to
+    // "plaintext": that silently breaks the client's documentSelector, so no
+    // didOpen is sent and diagnostics stop. Colour must not reintroduce that.
+    //
+    // window.__monaco is only exposed in dev builds, and Monaco puts the
+    // language nowhere in the DOM, so against the prod image this skips rather
+    // than passing vacuously on an empty list. Diagnostics themselves are
+    // covered in both stacks by the language-server tests above.
+    await startLeetCodeSession(page)
+    const exposed = await page.evaluate(() =>
+      Boolean((window as unknown as { __monaco?: unknown }).__monaco))
+    test.skip(!exposed, 'window.__monaco is a dev-build handle')
+
+    await expect.poll(async () => page.evaluate(() => {
+      const monaco = (window as unknown as { __monaco: {
+        editor: { getModels(): { getLanguageId(): string }[] } } }).__monaco
+      return monaco.editor.getModels().map((m) => m.getLanguageId())
+    }), { timeout: 30_000 }).toContain('python')
+  })
+})

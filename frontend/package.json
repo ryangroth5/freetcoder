@@ -13,6 +13,7 @@
   "dependencies": {
     "@codingame/monaco-vscode-javascript-default-extension": "~16.1.1",
     "@codingame/monaco-vscode-python-default-extension": "~16.1.1",
+    "@codingame/monaco-vscode-theme-defaults-default-extension": "~16.1.1",
     "@codingame/monaco-vscode-typescript-basics-default-extension": "~16.1.1",
     "@typefox/monaco-editor-react": "~6.7.0",
     "mermaid": "^11.17.2",
@@ -32,6 +33,7 @@
     "@tailwindcss/vite": "^4.1.0",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.2",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",

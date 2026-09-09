@@ -717,3 +717,91 @@ and expect to clear `node_modules/.vite` and reload twice after any change to
 prebundling.
 
 ---
+
+# Phase L: syntax highlighting works
+
+Fixed. Both stacks tokenize into multiple colours -- `mtk1, mtk5, mtk6, mtk14,
+mtk16, mtk17` where there was only ever `mtk1`.
+
+Three things were wrong, and all three had to go.
+
+## 1. The optimizeDeps exclusion was a misdiagnosis
+
+The four default-extension packages were excluded from prebundling to dodge an
+esbuild OOM. But the Build-and-memory note above records that OOM as esbuild
+being SIGKILLed **under memory pressure** during prebundling generally, "cured
+by restarting the Vite service" -- and those four packages hold ~520KB of
+grammars between them, far too little to be the cause.
+
+The exclusion split the module graph: excluded packages got raw source while
+`monaco-vscode-api` was prebundled, so there were two instances of its
+lifecycle module. Every `whenReady()` awaited a barrier that nothing would open.
+A workaround for an unrelated memory problem suppressed syntax highlighting for
+the life of the project.
+
+`optimizeDeps.exclude` is now empty. Do not re-add these packages to it; if the
+OOM returns, the answer is the memory settings, not the exclusion.
+
+An attempt to keep the exclusions and merely add
+`@codingame/monaco-vscode-api/extensions` to `optimizeDeps.include` does **not**
+work -- it fails differently, with the vscodetextmate error below.
+
+## 2. TextMate had no worker
+
+TextMate tokenizes in a background worker. `monaco-languageclient`'s
+`useWorkerFactory` throws `Unimplemented worker <label>` for any label absent
+from `workerLoaders`, and only `TextEditorWorker` was ever wired.
+
+`monaco-editor-wrapper` ships `configureDefaultWorkerFactory` at
+`monaco-editor-wrapper/workers/workerLoaders`, which supplies both labels. It
+works in the production build but **not** in dev: it resolves a bare specifier
+through `new URL(..., import.meta.url)` from inside a prebundled dependency.
+`EditorPane` therefore declares the two loaders itself using Vite's `?worker`
+import, which is compiled correctly in both.
+
+## 3. vscode-textmate is UMD, and the interop broke
+
+With the workers wired and one module instance, dev still threw
+`TypeError: Cannot set properties of undefined (setting 'vscodetextmate')`.
+`vscode-textmate/release/main.js` is a UMD bundle whose header assigns
+`exports.vscodetextmate`; reached indirectly it was left unconverted. Naming
+`vscode-textmate` and `vscode-oniguruma` in `optimizeDeps.include` makes esbuild
+do the CommonJS interop properly.
+
+## Prebundling breaks the extensions' resource URLs, so dev serves them
+
+The packages register files with `new URL('./resources/x.json',
+import.meta.url)`. Once prebundled that points into `node_modules/.vite/deps`,
+where the resources are not, and every grammar, theme and language-configuration
+404s. All requests land on one flat path, so the `extensionResources()` plugin
+in `vite.config.ts` serves them back out of the real packages. Dev only -- a
+production build resolves them itself.
+
+The alternative was re-registering ~20 files with manifests copied from the
+packages into our own source. Rejected: it duplicates upstream data that will
+rot on the next version bump, where the plugin reads from the packages.
+
+## What this changed elsewhere
+
+- `monaco.languages.register` is now a **gap-filler**, registering only ids the
+  extensions did not contribute. Go still needs it; python, javascript and
+  typescript no longer do. The reason it existed stands -- a model that resolves
+  to `plaintext` breaks the language client's documentSelector and diagnostics
+  stop -- so it is kept rather than deleted.
+- `@codingame/monaco-vscode-theme-defaults-default-extension` is now a declared
+  dependency. It was imported by `EditorPane` while only present transitively.
+- `@types/node` added: the dev-server plugin needs it.
+- Two tests in `problem.spec.ts` guard this: one asserts more than one distinct
+  `mtk` class (variety, not specific colours, so a theme change does not break
+  it), one asserts the language id is still `python`. The second skips against
+  the prod image, where `window.__monaco` is not exposed.
+
+## Method
+
+Phase J concluded "the barrier never opens" and "not module duplication". Both
+were wrong, and both came from reading source. What settled it was instrumenting
+`lifecycle.js` in `node_modules` and tagging the module with a random id at
+import: two ids appeared, and only one was the one `BARRIER OPENED` reported.
+Restore the file from its `.bak` afterwards.
+
+---

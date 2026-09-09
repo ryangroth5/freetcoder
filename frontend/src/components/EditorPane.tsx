@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MonacoEditorReactComp } from '@typefox/monaco-editor-react'
 import type { WrapperConfig } from 'monaco-editor-wrapper'
+// TextMate tokenizes in a background worker, and monaco-languageclient's
+// factory throws "Unimplemented worker TextMateWorker" for any label it was
+// not given -- so without these every token stays mtk1 however well the
+// grammars load.
+//
+// monaco-editor-wrapper ships configureDefaultWorkerFactory, but it resolves a
+// bare specifier through `new URL(..., import.meta.url)` from inside a
+// prebundled dependency, which the dev server cannot load ("Cannot set
+// properties of undefined (setting 'vscodetextmate')"). Vite's ?worker import
+// is compiled properly in both dev and build.
+import { useWorkerFactory } from 'monaco-languageclient/workerFactory'
+import TextMateWorker from '@codingame/monaco-vscode-textmate-service-override/worker?worker'
+import EditorWorker from '@codingame/monaco-vscode-editor-api/esm/vs/editor/editor.worker.js?worker'
 import { LogLevel } from '@codingame/monaco-vscode-api'
 // The same call the wrapper uses for its own model. It registers a *file* as
 // well as a model; monaco.editor.createModel does not, which is why a
@@ -23,26 +36,42 @@ import { monacoDidLoad } from '../theme'
 import type { Language } from '../api'
 
 /**
- * Register the languages up front.
+ * Fill in any language the extensions did not contribute.
  *
- * The default-extension packages did not register them in this setup, which
- * left every model at languageId "plaintext" -- so the language client's
- * documentSelector never matched, textDocument/didOpen was never sent, and the
- * server sat idle after a perfectly successful handshake. Verified in-browser.
+ * They contribute python, javascript and typescript themselves -- verified in
+ * the browser: `monaco.languages.getLanguages()` lists them, and their
+ * grammars colour. That only became true once the module graph stopped
+ * splitting in two (see Phase K in docs/container-discovery.md); before it,
+ * every whenReady() hung and these manual calls were the only thing keeping
+ * models off "plaintext".
+ *
+ * Go still has no default-extension package, and a model that resolves to
+ * plaintext breaks the language client's documentSelector, so diagnostics stop
+ * entirely. Registering only what is missing keeps Go working without
+ * shadowing an extension's richer definition.
  */
 let languagesRegistered = false
 function registerLanguages(): void {
   if (languagesRegistered) return
   languagesRegistered = true
-  // These must be registered by hand. The default-extension packages imported
-  // above do not contribute their languages in this setup -- with them alone,
-  // models resolve to "plaintext", the language client's documentSelector never
-  // matches, and no diagnostics arrive at all. Correct language identification
-  // matters more than colour.
-  monaco.languages.register({ id: 'python', extensions: ['.py'], aliases: ['Python'] })
-  monaco.languages.register({ id: 'javascript', extensions: ['.js'], aliases: ['JavaScript'] })
-  monaco.languages.register({ id: 'typescript', extensions: ['.ts'], aliases: ['TypeScript'] })
-  monaco.languages.register({ id: 'go', extensions: ['.go'], aliases: ['Go'] })
+  const have = new Set(monaco.languages.getLanguages().map((l) => l.id))
+  for (const lang of [
+    { id: 'python', extensions: ['.py'], aliases: ['Python'] },
+    { id: 'javascript', extensions: ['.js'], aliases: ['JavaScript'] },
+    { id: 'typescript', extensions: ['.ts'], aliases: ['TypeScript'] },
+    { id: 'go', extensions: ['.go'], aliases: ['Go'] },
+  ]) {
+    if (!have.has(lang.id)) monaco.languages.register(lang)
+  }
+}
+
+function configureWorkers(): void {
+  useWorkerFactory({
+    workerLoaders: {
+      TextEditorWorker: () => new EditorWorker(),
+      TextMateWorker: () => new TextMateWorker(),
+    },
+  })
 }
 
 const LSP_LANGUAGE_ID: Record<Language, string> = {
@@ -164,6 +193,7 @@ export function EditorPane({
       },
     },
     editorAppConfig: {
+      monacoWorkerFactory: configureWorkers,
       editorOptions: {
         // Hover and signature-help widgets are otherwise rendered inside the
         // editor container, so in this narrow pane they were clipped and ran
