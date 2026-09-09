@@ -21,53 +21,6 @@ export function resolveTheme(choice: ThemeChoice): 'light' | 'dark' {
   return choice
 }
 
-let monacoThemesDefined = false
-
-function defineMonacoThemes(): void {
-  if (monacoThemesDefined) return
-  monacoThemesDefined = true
-
-  // Colours mirror the CSS variables in index.css so the editor and the panels
-  // read as one surface rather than two.
-  monaco.editor.defineTheme('freetcoder-dark', {
-    base: 'vs-dark',
-    inherit: true,
-    rules: [
-      { token: 'comment', foreground: '6a9955', fontStyle: 'italic' },
-      { token: 'keyword', foreground: 'c586c0' },
-      { token: 'constant', foreground: '569cd6' },
-      { token: 'string', foreground: 'ce9178' },
-      { token: 'string.escape', foreground: 'd7ba7d' },
-      { token: 'number', foreground: 'b5cea8' },
-      { token: 'number.hex', foreground: 'b5cea8' },
-      { token: 'type', foreground: '4ec9b0' },
-      { token: 'type.identifier', foreground: '4ec9b0' },
-      { token: 'entity.name.function', foreground: 'dcdcaa' },
-      { token: 'operator', foreground: 'd4d4d4' },
-    ],
-    colors: { 'editor.background': '#1e1e1e' },
-  })
-
-  monaco.editor.defineTheme('freetcoder-light', {
-    base: 'vs',
-    inherit: true,
-    rules: [
-      { token: 'comment', foreground: '008000', fontStyle: 'italic' },
-      { token: 'keyword', foreground: 'af00db' },
-      { token: 'constant', foreground: '0000ff' },
-      { token: 'string', foreground: 'a31515' },
-      { token: 'string.escape', foreground: 'b06500' },
-      { token: 'number', foreground: '098658' },
-      { token: 'number.hex', foreground: '098658' },
-      { token: 'type', foreground: '267f99' },
-      { token: 'type.identifier', foreground: '267f99' },
-      { token: 'entity.name.function', foreground: '795e26' },
-      { token: 'operator', foreground: '000000' },
-    ],
-    colors: { 'editor.background': '#ffffff' },
-  })
-}
-
 //: Monaco's services do not exist until the editor wrapper has started. Calling
 //: defineTheme or setTheme before that leaves monaco-vscode-api in a state where
 //: the editor never renders at all -- silently, with no error. So the panels are
@@ -76,9 +29,11 @@ let monacoReady = false
 
 function applyMonacoTheme(resolved: 'light' | 'dark'): void {
   if (!monacoReady) return
-  defineMonacoThemes()
-  // The VSCode theme extensions own token colours; switching by name keeps
-  // TextMate highlighting intact, which defineTheme would discard.
+  // Switch by name. The VS Code theme extensions own the token colours, and
+  // there used to be a defineTheme call here that both discarded them and
+  // threw -- `defineTheme` does not exist in the wrapper's 'extended' mode, so
+  // it raised before setTheme ran and EditorPane swallowed it. The result was
+  // a light/dark toggle that never re-themed the editor at all.
   monaco.editor.setTheme(
     resolved === 'dark' ? 'Default Dark Modern' : 'Default Light Modern',
   )

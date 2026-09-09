@@ -3,7 +3,7 @@
 import { create } from 'zustand'
 import { api } from './api'
 import { readDefaultLanguage } from './prefs'
-import type { CaseInput, Language, Question, RunReport, SessionInfo } from './api'
+import type { AppSettings, CaseInput, Language, Question, RunReport, SessionInfo } from './api'
 import { randomId } from './id'
 
 /**
@@ -66,6 +66,8 @@ export type Screen = 'setup' | 'picker' | 'problem' | 'results' | 'settings'
 interface State {
   screen: Screen
   returnTo: Screen
+  /** Server settings, including whether the LLM is actually live. */
+  settings: AppSettings | null
   session: SessionInfo | null
   question: Question | null
   index: number
@@ -88,6 +90,7 @@ interface State {
   runId: string | null
 
   go: (screen: Screen) => void
+  loadSettings: () => Promise<void>
   /** Opens settings remembering where to come back to. */
   openSettings: () => void
   closeSettings: () => void
@@ -119,6 +122,7 @@ interface State {
 export const useStore = create<State>((set, get) => ({
   screen: 'setup',
   returnTo: 'picker',
+  settings: null,
   session: null,
   question: null,
   index: 0,
@@ -137,6 +141,16 @@ export const useStore = create<State>((set, get) => ({
   notice: null,
 
   go: (screen) => set({ screen }),
+
+  // Held centrally so the status dot in the header and the settings page
+  // cannot disagree, and so a key entered on one refreshes the other.
+  loadSettings: async () => {
+    try {
+      set({ settings: await api.getSettings() })
+    } catch {
+      // The badge is informational; failing to load it must not break the app.
+    }
+  },
 
   // Settings is a detour, not a destination: leaving must land you back where
   // you were, with the session untouched (it lives in this store, so it is).

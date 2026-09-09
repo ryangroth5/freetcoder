@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     #: fall back to canned questions.
     fake_llm: bool = False
 
+    #: Set when a key arrives through POST /api/setup rather than the
+    #: environment. It lets such a key override fake_llm, so a container
+    #: started with FREETCODER_FAKE_LLM=1 can still be pointed at a real
+    #: provider from the UI. Not settable over the settings API -- it is a fact
+    #: about where the key came from, not a preference.
+    key_from_session: bool = False
+
     @property
     def configured(self) -> bool:
         """False until the user supplies a key on the setup screen."""

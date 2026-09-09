@@ -21,7 +21,10 @@ const STATE = {
   db_path: '/data/freetcoder.db',
   has_key: true,
   key_hint: 'wxyz',
+  key_from_session: false,
   configured: true,
+  llm_status: 'live',
+  llm_reason: 'Using test-model at https://openrouter.ai/api/v1.',
 }
 
 async function stubSettings(page: import('@playwright/test').Page, over = {}) {
@@ -68,8 +71,11 @@ test.describe('settings', () => {
     await stubSettings(page)
     await gotoPicker(page)
     await page.getByRole('button', { name: 'Settings' }).click()
+    // Only the last four characters, and only where it came from.
     await expect(page.getByText(/ending wxyz/)).toBeVisible()
-    await expect(page.getByText(/FREETCODER_LLM_API_KEY/)).toBeVisible()
+    await expect(page.getByText(/from the environment/)).toBeVisible()
+    // The input is for supplying one, and starts empty.
+    await expect(page.getByLabel('API key')).toHaveValue('')
   })
 
   test('an in-memory database says so rather than pretending', async ({ page }) => {

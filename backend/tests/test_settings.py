@@ -198,3 +198,126 @@ class TestHonestyAboutStorage:
             # Applied for this process even though it will not survive.
             assert saved["values"]["repair_rounds"] == 5
         get_settings.cache_clear()
+
+
+class TestTheStatusTellsTheTruth:
+    """`configured` and `has_key` were both true while every question came
+    from a fixture. That is the confusion `llm_status` exists to end."""
+
+    async def test_a_real_key_reports_live(
+        self, configured_app: tuple[AsyncClient, str]
+    ) -> None:
+        client, _ = configured_app
+        body = (await client.get("/api/settings")).json()
+        assert body["llm_status"] == "live"
+        assert get_settings().llm_model in body["llm_reason"]
+
+    async def test_fake_mode_reports_offline_not_live(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("FREETCODER_DB_PATH", "")
+        monkeypatch.setenv("FREETCODER_LLM_API_KEY", "sk-real-key")
+        monkeypatch.setenv("FREETCODER_FAKE_LLM", "1")
+        get_settings.cache_clear()
+        app = create_app()
+        transport = ASGITransport(app=app)
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(transport=transport, base_url="http://t") as c,
+        ):
+            body = (await c.get("/api/settings")).json()
+            # The exact reported situation: a key present, and fixtures served.
+            assert body["has_key"] is True
+            assert body["configured"] is True
+            assert body["llm_status"] == "offline"
+            assert "FREETCODER_FAKE_LLM" in body["llm_reason"]
+        get_settings.cache_clear()
+
+    async def test_no_key_reports_unconfigured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("FREETCODER_DB_PATH", "")
+        monkeypatch.setenv("FREETCODER_LLM_API_KEY", "")
+        get_settings.cache_clear()
+        app = create_app()
+        transport = ASGITransport(app=app)
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(transport=transport, base_url="http://t") as c,
+        ):
+            body = (await c.get("/api/settings")).json()
+            assert body["llm_status"] == "unconfigured"
+        get_settings.cache_clear()
+
+
+class TestASessionKeyOverridesFakeMode:
+    """Without this, a container started with FREETCODER_FAKE_LLM=1 has no way
+    back to a real provider from inside the app."""
+
+    async def test_a_typed_key_beats_the_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from freetcoder.llm import FakeLLM, build_client
+        from freetcoder.llm.client import OpenAICompatibleClient
+
+        monkeypatch.setenv("FREETCODER_DB_PATH", "")
+        monkeypatch.setenv("FREETCODER_LLM_API_KEY", "")
+        monkeypatch.setenv("FREETCODER_FAKE_LLM", "1")
+        get_settings.cache_clear()
+        app = create_app()
+        transport = ASGITransport(app=app)
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(transport=transport, base_url="http://t") as c,
+        ):
+            assert isinstance(build_client(get_settings()), FakeLLM)
+
+            body = (await c.post(
+                "/api/setup", json={"api_key": "sk-typed-1234"}
+            )).json()
+            assert body["configured"] is True
+            assert isinstance(
+                build_client(get_settings()), OpenAICompatibleClient
+            )
+
+            state = (await c.get("/api/settings")).json()
+            assert state["llm_status"] == "live"
+            assert state["key_from_session"] is True
+            assert state["key_hint"] == "1234"
+            assert "sk-typed-1234" not in (await c.get("/api/settings")).text
+        get_settings.cache_clear()
+
+    async def test_the_flag_alone_still_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The browser suites depend on this."""
+        from freetcoder.llm import FakeLLM, build_client
+
+        monkeypatch.setenv("FREETCODER_LLM_API_KEY", "sk-from-env")
+        monkeypatch.setenv("FREETCODER_FAKE_LLM", "1")
+        get_settings.cache_clear()
+        assert isinstance(build_client(get_settings()), FakeLLM)
+        get_settings.cache_clear()
+
+    async def test_a_session_key_is_never_persisted(
+        self, configured_app: tuple[AsyncClient, str]
+    ) -> None:
+        client, db = configured_app
+        await client.post("/api/setup", json={"api_key": "sk-typed-5678"})
+
+        fresh = Storage(db)
+        await fresh.connect()
+        saved = await fresh.load_settings()
+        await fresh.close()
+        assert "llm_api_key" not in saved
+        assert not any("sk-typed-5678" in v for v in saved.values())
+
+    async def test_it_cannot_be_set_through_the_settings_api(
+        self, configured_app: tuple[AsyncClient, str]
+    ) -> None:
+        """It is a fact about where the key came from, not a preference."""
+        client, _ = configured_app
+        resp = await client.put(
+            "/api/settings", json={"key_from_session": True}
+        )
+        assert resp.status_code == 422

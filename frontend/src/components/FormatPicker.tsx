@@ -3,6 +3,7 @@ import { api } from '../api'
 import { useStore } from '../store'
 import { randomId } from '../id'
 import { GenerationProgress } from './GenerationProgress'
+import { LlmStatus } from './LlmStatus'
 import type {
   Difficulty,
   LibraryQuestion,
@@ -94,11 +95,12 @@ export function FormatPicker({ onStart }: { onStart: (s: SessionInfo) => void })
   return (
     <div className="mx-auto max-w-3xl p-8">
       <div className="flex items-baseline gap-4">
-        <h1 className="text-2xl font-semibold">What would you like to practise?</h1>
+        <h1 className="mr-auto text-2xl font-semibold">What would you like to practise?</h1>
+        <LlmStatus />
         <button
           onClick={useStore.getState().openSettings}
           aria-label="Settings"
-          className="ml-auto text-sm text-[var(--color-muted)] underline
+          className="text-sm text-[var(--color-muted)] underline
                      hover:text-[var(--color-ink)]"
         >
           ⚙ Settings

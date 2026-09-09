@@ -482,3 +482,29 @@ test.describe('syntax highlighting', () => {
     }), { timeout: 30_000 }).toContain('python')
   })
 })
+
+test.describe('editor theming', () => {
+  // theme.ts used to call monaco.editor.defineTheme, which does not exist in
+  // the wrapper's 'extended' mode. It threw before setTheme ran and EditorPane
+  // swallowed it, so the toggle never re-themed the editor -- invisibly.
+  //
+  // Assert on the editor's own theme class, not on a token colour: mtk1 tracks
+  // the CSS variables, so it changes with the panel theme even when setTheme
+  // never runs. A first version of this test passed with the bug reinstated.
+  test('toggling the theme re-themes the editor', async ({ page }) => {
+    await startLeetCodeSession(page)
+    const editor = page.locator('.monaco-editor').first()
+    await expect(editor).toBeVisible({ timeout: 30_000 })
+
+    const themeClass = async () => page.evaluate(() => {
+      const el = document.querySelector('.monaco-editor')
+      const classes = el ? [...el.classList] : []
+      return classes.find((c) => c === 'vs' || c === 'vs-dark') ?? ''
+    })
+    await expect.poll(themeClass, { timeout: 30_000 }).not.toBe('')
+
+    const before = await themeClass()
+    await page.getByRole('button', { name: 'Toggle theme' }).click()
+    await expect.poll(themeClass, { timeout: 15_000 }).not.toBe(before)
+  })
+})

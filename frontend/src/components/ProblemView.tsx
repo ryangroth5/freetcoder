@@ -5,6 +5,7 @@ import { useTheme } from '../theme'
 import { EditorPane } from './EditorPane'
 import { ResultsPane } from './ResultsPane'
 import { StatementPane } from './StatementPane'
+import { LlmStatus } from './LlmStatus'
 import { Timer } from './Timer'
 import { GenerationProgress } from './GenerationProgress'
 
@@ -73,6 +74,7 @@ export function ProblemView() {
                              text-white disabled:opacity-40">
             Submit
           </button>
+          <LlmStatus compact />
           <button
             onClick={openSettings}
             aria-label="Settings"

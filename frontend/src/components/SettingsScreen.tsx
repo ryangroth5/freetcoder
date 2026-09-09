@@ -42,6 +42,7 @@ const SERVER_FIELDS: {
 
 export function SettingsScreen() {
   const close = useStore((s) => s.closeSettings)
+  const loadSettings = useStore((s) => s.loadSettings)
   const { choice, setChoice } = useTheme()
   const [defaultLanguage, setDefaultLanguage] =
     useState<Language>(readDefaultLanguage)
@@ -50,6 +51,7 @@ export function SettingsScreen() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [apiKey, setApiKey] = useState('')
 
   useEffect(() => {
     api.getSettings()
@@ -70,11 +72,49 @@ export function SettingsScreen() {
       )
       const next = await api.saveSettings(changed)
       setSettings(next); setDraft(next.values); setSaved(true)
+      await loadSettings()
     } catch (err) {
       setError((err as Error).message)
     } finally {
       setBusy(false)
     }
+  }
+
+  /** Applies a key to the running server without storing it anywhere.
+   *
+   *  Reuses POST /api/setup, which has always been memory-only. A key entered
+   *  here also overrides FREETCODER_FAKE_LLM, so a container started in
+   *  offline mode can be pointed at a real provider without a restart.
+   */
+  async function useKey() {
+    setBusy(true); setError(null)
+    try {
+      await api.saveSetup({ api_key: apiKey.trim() })
+      setApiKey('')
+      await refreshStatus()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function clearKey() {
+    setBusy(true); setError(null)
+    try {
+      await api.saveSetup({ api_key: '' })
+      await refreshStatus()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function refreshStatus() {
+    const next = await api.getSettings()
+    setSettings(next); setDraft(next.values)
+    await loadSettings()
   }
 
   async function reset(field: string) {
@@ -146,12 +186,62 @@ export function SettingsScreen() {
             </p>
           )}
 
-          <Row label="API key" hint="Set FREETCODER_LLM_API_KEY in your .env">
-            <span className="text-sm text-[var(--color-muted)]">
-              {settings?.has_key
-                ? `set, ending ${settings.key_hint} — from the environment`
-                : 'not set'}
-            </span>
+          {settings && (
+            <div
+              className="flex items-start gap-2 rounded border p-3 text-sm"
+              style={{
+                borderColor: STATUS_COLOUR[settings.llm_status] + '66',
+                background: STATUS_COLOUR[settings.llm_status] + '0d',
+              }}
+              data-llm-status={settings.llm_status}
+            >
+              <span
+                aria-hidden="true"
+                className="mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full"
+                style={{ background: STATUS_COLOUR[settings.llm_status] }}
+              />
+              <span>
+                <strong>{STATUS_LABEL[settings.llm_status]}</strong>
+                {' — '}{settings.llm_reason}
+              </span>
+            </div>
+          )}
+
+          <Row
+            label="API key"
+            hint={settings?.has_key
+              ? settings.key_from_session
+                ? `set, ending ${settings.key_hint} — entered here, lost when the server restarts`
+                : `set, ending ${settings.key_hint} — from the environment`
+              : 'not set. FREETCODER_LLM_API_KEY in .env is the durable place'}
+          >
+            <input
+              type="password"
+              aria-label="API key"
+              placeholder="sk-or-..."
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              className={inputClass}
+            />
+            <button
+              onClick={useKey}
+              disabled={busy || !apiKey.trim()}
+              className="rounded border border-[var(--color-edge)] px-2 py-1
+                         text-xs hover:border-[var(--color-muted)]
+                         disabled:opacity-40"
+            >
+              Use this key
+            </button>
+            {settings?.key_from_session && (
+              <button
+                onClick={clearKey}
+                disabled={busy}
+                className="text-xs text-[var(--color-muted)] underline
+                           hover:text-[var(--color-ink)] disabled:opacity-40"
+              >
+                Clear
+              </button>
+            )}
           </Row>
 
           {settings && SERVER_FIELDS.map((f) => (
@@ -257,6 +347,18 @@ function Row({ label, hint, source, onReset, children }: {
       </div>
     </div>
   )
+}
+
+const STATUS_COLOUR: Record<string, string> = {
+  live: 'var(--color-pass)',
+  offline: 'var(--color-warn)',
+  unconfigured: 'var(--color-muted)',
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  live: 'LLM live',
+  offline: 'Offline — recorded questions',
+  unconfigured: 'No API key',
 }
 
 const inputClass =

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -22,7 +23,7 @@ from .formats import (
     unsupported_topics,
 )
 from .library import QuestionLibrary, build_library
-from .llm import FakeLLM
+from .llm import FakeLLM, llm_status
 from .models import Difficulty, GatedQuestion, Language, TestCase
 from .progress import GenerationCancelled, Reporter, Run, registry
 from .scoring import QuestionScore, score_session
@@ -98,10 +99,18 @@ class SettingsState(BaseModel):
     #: False when the database is in-memory, so saves will not survive a restart.
     persistent: bool
     db_path: str
-    #: The key is environment-only; these describe it without revealing it.
+    #: The key is never returned; these describe it without revealing it.
     has_key: bool
     key_hint: str                    # last four characters, or ''
+    #: True when the key came from the setup form rather than the environment,
+    #: so the UI can say it will not survive a restart.
+    key_from_session: bool
     configured: bool
+    #: What the app is actually talking to. `configured` and `has_key` can both
+    #: be true while every question comes from a fixture, which is precisely
+    #: the confusion this exists to end.
+    llm_status: str                  # 'live' | 'offline' | 'unconfigured'
+    llm_reason: str
 
 
 class StyleInfo(BaseModel):
@@ -207,6 +216,14 @@ async def post_setup(
         s.llm_model = model
     if (key := payload.get("api_key", "").strip()):
         s.llm_api_key = key
+        # Records where it came from, which is what lets it beat
+        # FREETCODER_FAKE_LLM. See llm.build_client.
+        s.key_from_session = True
+    elif "api_key" in payload:
+        # An explicit empty key clears the session override and falls back to
+        # whatever the environment provides.
+        s.llm_api_key = os.environ.get("FREETCODER_LLM_API_KEY", "")
+        s.key_from_session = False
     request.app.state.llm = None  # force a rebuild with the new settings
     return await get_setup()
 
@@ -216,6 +233,7 @@ def _settings_state(request: Request) -> SettingsState:
     s = get_settings()
     saved: set[str] = getattr(request.app.state, "saved_settings", set())
     key = s.llm_api_key
+    status, reason = llm_status(s)
     return SettingsState(
         values={name: getattr(s, name) for name in sorted(SETTABLE)},
         sources={
@@ -228,7 +246,10 @@ def _settings_state(request: Request) -> SettingsState:
         db_path=s.db_path,
         has_key=bool(key),
         key_hint=key[-4:] if len(key) >= 4 else "",
+        key_from_session=s.key_from_session,
         configured=s.configured,
+        llm_status=status,
+        llm_reason=reason,
     )
 
 

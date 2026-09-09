@@ -199,7 +199,13 @@ export interface AppSettings {
   has_key: boolean
   /** Last four characters of the key, or ''. The key itself never leaves the server. */
   key_hint: string
+  /** The key came from the setup form, so it dies with the server process. */
+  key_from_session: boolean
   configured: boolean
+  /** What the app is actually talking to. `configured` and `has_key` can both
+   *  be true while every question comes from a fixture. */
+  llm_status: 'live' | 'offline' | 'unconfigured'
+  llm_reason: string
 }
 
 export interface ProgressStep {
