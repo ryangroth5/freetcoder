@@ -142,10 +142,24 @@ class TestScorecard:
         thin.names_all_parameters = False
         thin.accepted_first_pass = False
 
-        summary = Scorecard(variant="X", reports=[good, thin]).summary()
-        assert summary["questions"] == 2
-        assert summary["first_pass"] == 0.5
+        card = Scorecard(variant="X", attempted=4, reports=[good, thin])
+        summary = card.summary()
+        assert summary["asked"] == 4
+        assert summary["accepted"] == 2
+        # Acceptance is over everything asked for; prose over what came back.
+        assert summary["accept_rate"] == 0.5
         assert summary["names_params"] == 0.5
 
     def test_an_empty_run_does_not_divide_by_zero(self) -> None:
-        assert Scorecard(variant="X").summary()["questions"] == 0
+        summary = Scorecard(variant="X").summary()
+        assert summary["accepted"] == 0
+        assert summary["accept_rate"] == 0.0
+
+    def test_prose_rates_do_not_flatter_a_variant_that_mostly_fails(self) -> None:
+        """One immaculate question out of ten is not a good prompt."""
+        good = score_question(GeneratedQuestion.model_validate(good_question()))
+        card = Scorecard(variant="X", attempted=10, reports=[good],
+                         failures=["reference_failed"] * 9)
+        summary = card.summary()
+        assert summary["prose_complete"] == 1.0   # of what came back
+        assert summary["accept_rate"] == 0.1      # but only a tenth came back

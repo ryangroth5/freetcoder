@@ -65,7 +65,10 @@ class OpenAICompatibleClient:
         self, *, system: str, user: str, schema: type[M], temperature: float = 0.7
     ) -> M:
         last: Exception | None = None
-        for attempt in range(self._max_retries):
+        # max(1, ...) because these are *retries*: zero of them still means one
+        # attempt. Looping over range(0) made a configured 0 do nothing at all
+        # and report "no valid response after 0 attempts: None".
+        for attempt in range(max(1, self._max_retries)):
             # Only the first attempt asks for a strict schema. If the provider
             # rejected it or produced junk, loosening the ask beats hammering
             # the same request that already failed.
@@ -85,7 +88,9 @@ class OpenAICompatibleClient:
             except (APIError, json.JSONDecodeError, ValueError) as exc:
                 last = exc
                 log.warning("LLM request failed (attempt %d): %s", attempt + 1, exc)
-        raise LLMError(f"no valid response after {self._max_retries} attempts: {last}") from last
+        raise LLMError(
+            f"no valid response after {max(1, self._max_retries)} attempt(s): {last}"
+        ) from last
 
     async def complete_json_with_tools(
         self,
@@ -319,7 +324,16 @@ class OpenAICompatibleClient:
             kwargs["response_format"] = {"type": "json_object"}
             resp = await self._client.chat.completions.create(**kwargs)
 
-        content = resp.choices[0].message.content
+        # An OpenAI-compatible gateway can answer 200 with an error payload and
+        # no `choices` at all -- rate limits and upstream provider failures both
+        # look like this. Indexing it blind turned that into a TypeError deep in
+        # the stack instead of something a caller could report.
+        choices = getattr(resp, "choices", None)
+        if not choices:
+            detail = getattr(resp, "error", None) or "no choices in response"
+            raise LLMError(f"provider returned no completion: {detail}")
+
+        content = choices[0].message.content
         if not content:
             raise LLMError("empty response from provider")
         return str(content)

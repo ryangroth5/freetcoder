@@ -171,10 +171,19 @@ def score_question(
 
 @dataclass
 class Scorecard:
-    """A run of one variant, aggregated."""
+    """A run of one variant, aggregated.
+
+    `attempted` is tracked separately from `reports` on purpose. A rejected
+    question has no prose to score, so prose rates are over accepted questions
+    while acceptance is over everything asked for. Averaging prose over
+    accepted-only *and* calling that the variant's score would flatter a prompt
+    that produces one immaculate question and two rejects.
+    """
 
     variant: str = ""
+    attempted: int = 0
     reports: list[QualityReport] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
 
     def _rate(self, attr: str) -> float:
         if not self.reports:
@@ -185,7 +194,9 @@ class Scorecard:
         n = len(self.reports)
         return {
             "variant": self.variant,
-            "questions": n,
+            "asked": self.attempted,
+            "accepted": n,
+            "accept_rate": round(n / self.attempted, 2) if self.attempted else 0.0,
             "first_pass": round(self._rate("accepted_first_pass"), 2),
             "prose_complete": round(self._rate("prose_complete"), 2),
             "names_params": round(self._rate("names_all_parameters"), 2),

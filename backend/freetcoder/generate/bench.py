@@ -92,9 +92,11 @@ async def run_variant(
         )
         elapsed = time.monotonic() - started
 
+        card.attempted += 1
         if result.question is None:
             outcomes = [a.outcome.value for a in result.attempts]
-            print(f"  {variant} {i + 1}/{count}  FAILED  {outcomes}")
+            card.failures.extend(outcomes)
+            print(f"  {variant} {i + 1}/{count}  {elapsed:5.1f}s  REJECTED  {outcomes}")
             continue
 
         q = result.question.question
