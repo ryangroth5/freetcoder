@@ -214,7 +214,7 @@ function Tab({ active, onClick, children }: {
   return (
     <button onClick={onClick}
       className={`border-b-2 px-3 py-2 text-sm ${
-        active ? 'border-[var(--color-accent)] text-white'
+        active ? 'border-[var(--color-accent)] text-[var(--color-ink)]'
                : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]'}`}>
       {children}
     </button>

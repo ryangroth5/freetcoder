@@ -508,3 +508,48 @@ test.describe('editor theming', () => {
     await expect.poll(themeClass, { timeout: 15_000 }).not.toBe(before)
   })
 })
+
+test.describe('tab legibility', () => {
+  // The active tab hardcoded text-white on a transparent background, so in the
+  // light theme its label was white on white -- invisible. Both tab strips had
+  // it. Assert contrast rather than a colour, so a repalette does not break it.
+  async function contrastOfActiveTabs(page: import('@playwright/test').Page) {
+    return page.evaluate(() => {
+      const parse = (c: string) =>
+        (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+      const luminance = ([r, g, b]: number[]) =>
+        (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+
+      // Walk up for the first non-transparent background behind the element.
+      const backdrop = (el: Element): number[] => {
+        let node: Element | null = el
+        while (node) {
+          const bg = getComputedStyle(node).backgroundColor
+          if (bg && !bg.includes('rgba(0, 0, 0, 0)')) return parse(bg)
+          node = node.parentElement
+        }
+        return [255, 255, 255]
+      }
+
+      return [...document.querySelectorAll('button')]
+        .filter((b) => b.className.includes('border-b-2')
+          && !b.className.includes('border-transparent'))
+        .map((b) => Math.abs(
+          luminance(parse(getComputedStyle(b).color)) - luminance(backdrop(b)),
+        ))
+    })
+  }
+
+  for (const theme of ['light', 'dark'] as const) {
+    test(`active tabs are readable in the ${theme} theme`, async ({ page }) => {
+      await page.addInitScript((t) => {
+        localStorage.setItem('freetcoder.theme', t)
+      }, theme)
+      await startLeetCodeSession(page)
+
+      const contrasts = await contrastOfActiveTabs(page)
+      expect(contrasts.length, 'no active tab found to check').toBeGreaterThan(0)
+      for (const c of contrasts) expect(c).toBeGreaterThan(0.2)
+    })
+  }
+})
