@@ -1,5 +1,8 @@
 # The question library
 
+> Maintainer documentation. If you just want to run freetcoder and
+> practise, read [using-freetcoder.md](using-freetcoder.md) instead.
+
 A **separate service** holding questions people want to keep, with its own
 FastAPI app, its own SQLite database, its own port (8090) and its own volume.
 

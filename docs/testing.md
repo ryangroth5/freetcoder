@@ -1,5 +1,8 @@
 # The test suites
 
+> Maintainer documentation. If you just want to run freetcoder and
+> practise, read [using-freetcoder.md](using-freetcoder.md) instead.
+
 Four suites, all run in-container. `make check` runs lint and the Python
 suites; `make e2e` and `make e2e-prod` run the browser suites.
 

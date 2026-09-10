@@ -1,5 +1,8 @@
 # Container discovery transcript (Phase A)
 
+> Maintainer documentation. If you just want to run freetcoder and
+> practise, read [using-freetcoder.md](using-freetcoder.md) instead.
+
 Findings from an interactive `python:3.12-slim-bookworm` session on **linux/arm64**
 (Docker 28.0.1). Every line in the Dockerfile traces back to something verified here.
 
@@ -201,9 +204,13 @@ Confirmed fixed in-browser: `languageId: "python"`, `didOpen` sent, one marker r
   the Vite service.
 
 ## End-to-end test hazards
-- The API key lives in server process memory, so whether the setup screen appears
-  depends on what ran before — and it can be visible when checked and gone a tick later.
-  Race-tolerant helpers, or `page.route` stubbing of `/api/setup`.
+- **Superseded.** The API key used to live only in server process memory, so
+  whether the setup screen appeared depended on what had run before, and the
+  helpers were race-tolerant to cope. `gotoPicker` now stubs `GET /api/setup`
+  outright and never POSTs, because the old approach reconfigured the running
+  backend — see docs/testing.md. The durable place for a key is `.env`; a key
+  entered in Settings applies to the running process only, and overrides
+  `FREETCODER_FAKE_LLM`.
 - Monaco's textarea sits under `.view-lines`, which intercepts pointer events: click
   `.view-lines`.
 - Monaco auto-indents typed newlines and corrupts Python. Type single-line solutions

@@ -1,5 +1,8 @@
 # The execution protocol
 
+> Maintainer documentation. If you just want to run freetcoder and
+> practise, read [using-freetcoder.md](using-freetcoder.md) instead.
+
 The contract between the backend and the *harness* — the driver program wrapped
 around a candidate's submission to run it against test cases.
 

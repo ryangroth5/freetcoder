@@ -1,5 +1,8 @@
 # How a question is generated
 
+> Maintainer documentation. If you just want to run freetcoder and
+> practise, read [using-freetcoder.md](using-freetcoder.md) instead.
+
 Three escalating mechanisms, each engaged only when the one before it fails:
 
 ```

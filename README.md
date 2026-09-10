@@ -25,6 +25,11 @@ repointing the endpoint at a hostile host.
 
 Then open **http://localhost:5173**.
 
+**New here?** [docs/using-freetcoder.md](docs/using-freetcoder.md) is the guide
+to actually using it — the screens, the tutor, what Run and Submit each do, and
+what to check when something looks wrong. The rest of this file is the overview
+and the design rationale.
+
 Prefer to kick the tyres with no API key at all? Recorded questions are served
 in offline mode:
 
@@ -66,6 +71,24 @@ enter them on the app's setup screen.
 | `FREETCODER_DB_PATH` | *(empty → in-memory)* | Set to `/data/freetcoder.db` with a volume |
 | `FREETCODER_FAKE_LLM` | `0` | `1` serves recorded questions; no key or network needed |
 | `FREETCODER_LIBRARY_URL` | *(empty)* | Question library service; empty disables save/browse |
+
+Tunables, all also editable from the Settings page. The first three cost tokens
+when raised:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `FREETCODER_GENERATION_ATTEMPTS` | `4` | Regenerations before giving up on a question |
+| `FREETCODER_REPAIR_ROUNDS` | `3` | Patch-and-re-gate rounds before regenerating |
+| `FREETCODER_CHECK_STATEMENT_SUFFICIENCY` | `1` | Second model solves from the prose alone; roughly doubles generation cost |
+| `FREETCODER_TOOL_CALL_BUDGET` | `6` | Code executions the model may make while repairing |
+| `FREETCODER_TUTOR_TOOL_BUDGET` | `4` | Reference probes the tutor may make per reply |
+| `FREETCODER_TUTOR_MESSAGE_CAP` | `60` | Tutor messages per session |
+| `FREETCODER_LLM_TIMEOUT_S` | `120` | |
+| `FREETCODER_LLM_MAX_RETRIES` | `3` | |
+
+The HTTP API documents itself: **`/docs`** serves Swagger UI and
+`/openapi.json` the schema, so there is no hand-written route table here to fall
+out of date.
 
 Everything except the key is also editable at runtime from the **Settings**
 page (the gear on the picker or the problem header), and a value saved there
@@ -138,21 +161,66 @@ docker compose run --rm dev python -m freetcoder.generate \
     --style codility --preset performance -n 20
 ```
 
+### A second model checks the question can be answered
+
+Every other check validates a question against itself; none of them read the
+prose. So a second model solves each question from the **statement, constraints
+and examples alone** — no reference, no hidden cases — and its answer is run
+against the oracle. Disagreement means the statement is missing something a
+candidate would need, and it is rewritten.
+
+This is the only check that validates what you actually read. It roughly doubles
+generation cost, and `FREETCODER_CHECK_STATEMENT_SUFFICIENCY=0` turns it off.
+
 ### The editor is a real one
 
 Monaco talking LSP over a WebSocket to language servers running in the
 container — `pyright` for Python, `typescript-language-server` for JavaScript
 and TypeScript: completion, hover tooltips, signature help, go-to-definition and
-live diagnostics. If a language server dies, editing keeps working and only the
+live diagnostics. Syntax colouring comes from the same TextMate grammars VS Code
+ships. If a language server dies, editing keeps working and only the
 intelligence degrades.
+
+### A tutor that cannot leak the answer
+
+A chat beside the test results, with your code, your run history, the failing
+case and a *characterisation* of the hidden tests — how many, what shapes — so
+it can help you reason about valid input. It can query the reference solution
+for what a given input produces, and report the result.
+
+It never sees the reference's source and never the hidden cases verbatim:
+either alone is harmless, but together they are a lookup table. It is disabled
+during GCA and Codility sessions until you submit, because a timed assessment
+that ships an AI assistant is not simulating anything.
+
+### Bring your own question
+
+Describe one ("something about counting dogs") or paste one you saw elsewhere.
+It is tightened into a well-defined problem, given a reference solution and
+hidden tests, and validated like any generated question. Every judgement call it
+had to make is recorded in a note you can read, because being told "ties break
+toward the earliest word" up front is the difference between an informed answer
+and a baffling failure.
+
+### Told what is happening, and whether it is real
+
+Generation takes tens of seconds, so a panel names each step as it runs, with a
+cancel that is honest about what it cannot interrupt.
+
+A status dot next to Settings says whether the app is really talking to a
+provider: **live**, **offline** (recorded questions), or **no key**. It exists
+because a valid key and `FREETCODER_FAKE_LLM=1` can be true at once, and
+`configured` and `has_key` were both true while every question came from a
+fixture.
 
 ### Editable test cases
 
 The Testcase tab is an editor, not a display. Change the provided examples, add
 as many cases as you like, duplicate or delete them. Leave the expected value
-blank to just see what your code returns; fill it in to get pass/fail. Your cases
-run on **Run** only and never affect your score — Submit always uses the
-question's own examples plus its hidden cases.
+blank to just see what your code returns; fill it in to get pass/fail, or press
+**Compute expected** to ask the intended solution what those arguments produce.
+Your cases run on **Run** only and never affect your score — Submit always uses
+the question's own examples plus its hidden cases.
 
 ### A shared question library
 
@@ -214,7 +282,12 @@ isolation and would weaken the boundary here.
 Optional. With no volume the database is in memory and everything works, just
 forgetfully. Attaching one caches **gate-approved questions**, which is the real
 payoff — generating and validating a question costs tokens and tens of seconds,
-so replaying one is a large win. Attempt history is kept too.
+so replaying one is a large win. Attempt history and server settings are kept
+too.
+
+`dev` and `prod` use **separate** volumes — `freetcoder-dev-data` and
+`freetcoder-data`. They shared one until test runs were found writing cached
+questions into the database behind the app you actually practise against.
 
 ---
 
@@ -224,6 +297,7 @@ so replaying one is a large win. Attempt history is kept too.
 make dev        # library :8090 + backend :8081 + Vite HMR :5173  (open 5173)
 make check      # ruff, mypy, pytest, tsc
 make test       # backend tests only
+make web-test   # frontend unit tests (vitest)
 make e2e        # Playwright vs the dev stack
 make e2e-prod   # Playwright vs the built production image
 make shell      # shell in the dev container
@@ -249,6 +323,7 @@ backend/freetcoder/
   scoring.py   per-platform scoring   storage.py   SQLite
   lsp_bridge.py  WebSocket <-> language-server stdio
 frontend/src/  React + Monaco + the three-tier picker
+docs/using-freetcoder.md      how to use the app (the only user-facing doc)
 docs/container-discovery.md   why the Dockerfile and build config look like this
 docs/testing.md               the four suites, what they cost, and what e2e-prod caught
 docs/question-generation.md   how a question is generated, gated and repaired
@@ -264,8 +339,9 @@ ES modules.
 
 ## Status
 
-Python, JavaScript and TypeScript working end to end — 243 backend tests,
-26 library tests, 28 browser tests.
+Python, JavaScript and TypeScript working end to end — 476 backend tests,
+27 library tests, 4 frontend unit tests, and 58 browser tests run against both
+the dev stack and the built production image.
 
 Not yet built: Go (needs an adapter and toolchain; the compile phase it requires
 already exists for TypeScript), SQL concentration (needs a SQLite runner
