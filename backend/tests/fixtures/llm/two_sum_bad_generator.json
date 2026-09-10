@@ -61,5 +61,19 @@
     }
   ],
   "hidden_generator_py": "print('I am not JSON at all')\n",
-  "brute_force_py": "def two_sum(nums, target):\n    for i in range(len(nums)):\n        for j in range(i + 1, len(nums)):\n            if nums[i] + nums[j] == target:\n                return [i, j]\n    return []\n"
+  "brute_force_py": "def two_sum(nums, target):\n    for i in range(len(nums)):\n        for j in range(i + 1, len(nums)):\n            if nums[i] + nums[j] == target:\n                return [i, j]\n    return []\n",
+  "constraints": [
+    {
+      "name": "nums",
+      "min_length": 2,
+      "max_length": 10000,
+      "element_min": -1000000000.0,
+      "element_max": 1000000000.0
+    },
+    {
+      "name": "target",
+      "min": -2000000000.0,
+      "max": 2000000000.0
+    }
+  ]
 }

@@ -62,5 +62,19 @@
   ],
   "hidden_generator_py": "import json, random\nrandom.seed(3)\nfor _ in range(5):\n    nums = [random.randint(0, 50) for _ in range(8)]\n    print(json.dumps({'args': {'nums': nums, 'target': nums[0] + nums[1]}}))\n",
   "brute_force_py": "def two_sum(nums, target):\n    for i in range(len(nums)):\n        for j in range(i + 1, len(nums)):\n            if nums[i] + nums[j] == target:\n                return [i, j]\n    return []\n",
-  "complexity_target": "O(n)"
+  "complexity_target": "O(n)",
+  "constraints": [
+    {
+      "name": "nums",
+      "min_length": 2,
+      "max_length": 10000,
+      "element_min": -1000000000.0,
+      "element_max": 1000000000.0
+    },
+    {
+      "name": "target",
+      "min": -2000000000.0,
+      "max": 2000000000.0
+    }
+  ]
 }

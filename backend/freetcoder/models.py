@@ -104,7 +104,10 @@ class GeneratedQuestion(BaseModel):
         min_length=80,
         description="Markdown. May contain ```mermaid fences and inline images.",
     )
-    constraints_md: str = Field(description="Markdown bullet list of input bounds")
+    constraints_md: str = Field(
+        min_length=10,
+        description="Markdown bullet list of input bounds",
+    )
     #: The same bounds as data, so the gate can check them. Must agree with the
     #: prose: they are two renderings of one promise to the candidate.
     constraints: list[ParamConstraint] = Field(
@@ -169,6 +172,7 @@ class GateOutcome(enum.StrEnum):
     SCAFFOLD_INVALID = "scaffold_invalid"
     REFERENCE_TOO_SLOW = "reference_too_slow"
     STATEMENT_INSUFFICIENT = "statement_insufficient"
+    PROSE_TOO_THIN = "prose_too_thin"
     BRUTE_FORCE_DISAGREES = "brute_force_disagrees"
     PERF_NOT_DISCRIMINATING = "perf_not_discriminating"
 

@@ -68,10 +68,22 @@ class CandidateSolution(BaseModel):
 
 
 def build_solver_prompt(q: GeneratedQuestion, language: Language) -> str:
-    """Everything a candidate sees, and nothing more."""
+    """Everything a candidate sees, minus the title.
+
+    The title is withheld deliberately. A memorable one -- "Longest Subarray
+    With Sum Divisible by K" -- plus the worked examples is often enough for a
+    strong model to *recall* a published problem and solve it without reading a
+    word of the statement. That made this check pass on precisely the questions
+    it exists to catch: one shipped with its description missing entirely.
+
+    Withholding it means a pass says the prose carries the task, which is the
+    property being tested. A candidate does see the title, so this is stricter
+    than their experience -- deliberately, because the title is the one part we
+    cannot trust to be informative rather than evocative.
+    """
     sig = q.signature_for(language)
     parts = [
-        f"# {q.title}\n\n{q.statement_md}",
+        f"# Problem\n\n{q.statement_md}",
         f"\n## Constraints\n\n{q.constraints_md}",
     ]
     if q.clarifications:

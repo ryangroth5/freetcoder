@@ -587,6 +587,72 @@ def _check_reference_scaling(
     return label, None
 
 
+def _parameter_names(q: GeneratedQuestion) -> list[str]:
+    """Every parameter the candidate is handed, in first-seen order."""
+    names: list[str] = []
+    for case in q.visible_tests:
+        for name in case.args:
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def _check_prose(q: GeneratedQuestion) -> GateReport | None:
+    """The statement and constraints have to say something.
+
+    The gate is otherwise entirely about executable artifacts, and that gap is
+    how a question shipped with the title restated as its description and blank
+    constraints -- the model had recalled a published problem and skipped the
+    prose. Nothing read either field: `constraints_md` had no validation at all,
+    and an empty `constraints` list makes _check_constraints pass vacuously, so
+    the omission was invisible twice over.
+
+    Parameter coverage rather than a length rule. Length is a proxy a model can
+    satisfy with filler; naming the inputs it is given cannot be faked by
+    padding, and a bound per parameter is the promise the harness enforces.
+    """
+    params = _parameter_names(q)
+    if not params:
+        return None  # nothing to describe; other checks own this case
+
+    body = q.statement_md.lower()
+    # A statement that is only the title tells the candidate nothing they did
+    # not already read at the top of the page.
+    without_title = body.replace(q.title.lower(), "").strip()
+    if len(without_title) < 60:
+        return GateReport(
+            outcome=GateOutcome.PROSE_TOO_THIN,
+            detail=(
+                "statement_md is essentially the title repeated; it must "
+                "describe the task, the inputs and what to return"
+            ),
+        )
+
+    unmentioned = [name for name in params if name.lower() not in body]
+    if unmentioned:
+        return GateReport(
+            outcome=GateOutcome.PROSE_TOO_THIN,
+            detail=(
+                "statement_md never mentions "
+                + ", ".join(repr(n) for n in unmentioned)
+                + "; every parameter must be described in the prose"
+            ),
+        )
+
+    unbounded = [n for n in params if n not in {c.name for c in q.constraints}]
+    if unbounded:
+        return GateReport(
+            outcome=GateOutcome.PROSE_TOO_THIN,
+            detail=(
+                "no constraint given for "
+                + ", ".join(repr(n) for n in unbounded)
+                + "; a candidate cannot reason about an input with no bounds, "
+                "and the generator is not checked against one"
+            ),
+        )
+    return None
+
+
 def validate_question(
     q: GeneratedQuestion,
     *,
@@ -605,6 +671,9 @@ def validate_question(
             outcome=GateOutcome.SCHEMA_INVALID,
             detail=f"no signature for {language.value}",
         )
+
+    if (report := _check_prose(q)) is not None:
+        return report
 
     offered_languages = list(languages or [language])
     report_to(

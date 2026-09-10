@@ -221,6 +221,13 @@ class TestCorrectnessGuards:
     def test_answers_beyond_2_53_are_rejected_when_js_is_offered(self) -> None:
         """IEEE-754 doubles lose integer precision there, silently."""
         q = load("two_sum_multilang")
+        # The point is the 2^53 boundary, not the bounds; widen them so the
+        # magnitude check is what fires rather than the constraint check.
+        q.constraints = [
+            ParamConstraint(name="nums", min_length=2, max_length=10000,
+                            element_min=-(2**60), element_max=2**60),
+            ParamConstraint(name="target", min=-(2**60), max=2**60),
+        ]
         q.hidden_generator_py = (
             "import json\n"
             "for _ in range(12):\n"
@@ -304,11 +311,17 @@ class TestConstraintsAreChecked:
         q.visible_tests[0].args["target"] = 99_999
         assert "fix whichever is wrong" in validate_question(q).detail
 
-    def test_questions_without_structured_constraints_still_pass(self) -> None:
-        """Constraints are additive: older questions are not invalidated."""
+    def test_questions_without_structured_constraints_are_now_rejected(self) -> None:
+        """Reversal, deliberate. Constraints used to be optional -- "additive,
+        so older questions are not invalidated". That is exactly how a question
+        shipped with blank constraints: an empty list makes _check_constraints
+        pass vacuously, so nothing anywhere noticed. A candidate cannot reason
+        about an input with no stated bounds, and the generator is not checked
+        against one either."""
         q = load("two_sum_good")
         q.constraints = []
-        assert validate_question(q).accepted
+        report = validate_question(q)
+        assert report.outcome is GateOutcome.PROSE_TOO_THIN
 
 
 class TestScaffoldsMatchTheirLanguage:
@@ -415,7 +428,13 @@ class TestTheReferenceIsAsFastAsItClaims:
     def _question(self, reference: str, target: str = "O(n) time") -> GeneratedQuestion:
         q = load("two_sum_good")
         q.complexity_target = target
-        q.constraints = []
+        # One synthetic parameter, so it carries one bound. The prose check
+        # requires every parameter to be described and bounded.
+        q.constraints = [ParamConstraint(name="n", min=1, max=100000)]
+        q.statement_md = (
+            "Given an integer `n`, do `n` units of work and return `n`. "
+            "This exists to measure how the reference scales with `n`."
+        )
         # A stated target requires a brute force, and it must actually fail the
         # large cases -- otherwise the target is unenforced.
         q.brute_force_py = (

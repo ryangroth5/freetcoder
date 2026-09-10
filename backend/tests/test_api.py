@@ -778,6 +778,9 @@ class TestComputeExpected:
         bounded["constraints"] = [
             {"name": "nums", "min_length": 2, "max_length": 40,
              "element_min": -500, "element_max": 500},
+            # Every parameter needs a bound or the gate rejects the question
+            # before this test gets to say anything about compute.
+            {"name": "target", "min": -1000, "max": 1000},
         ]
         fake_llm.queue_next(bounded)
 

@@ -50,6 +50,7 @@ TARGET_FOR: dict[GateOutcome, RepairTarget] = {
     GateOutcome.CONSTRAINT_VIOLATION: "constraints",
     GateOutcome.CLARIFICATION_WRONG: "clarifications",
     GateOutcome.STATEMENT_INSUFFICIENT: "statement",
+    GateOutcome.PROSE_TOO_THIN: "statement",
     GateOutcome.UNSAFE_MAGNITUDE: "generator",
     GateOutcome.BRUTE_FORCE_DISAGREES: "brute_force",
     GateOutcome.MISSING_BRUTE_FORCE: "brute_force",
