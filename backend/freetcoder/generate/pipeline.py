@@ -162,6 +162,7 @@ async def generate_question(
     tool_budget: int = 6,
     check_sufficiency: bool = True,
     exclude_titles: list[str] | None = None,
+    system_extra: str = "",
     report_to: Reporter = NULL_REPORTER,
 ) -> GenerationResult:
     """Produce one gate-approved question, or report why we could not.
@@ -171,7 +172,9 @@ async def generate_question(
     Only when repair is exhausted does it ask for a fresh question.
     """
     difficulty = difficulty or config.session.difficulty_for(0)
-    system = _read_prompt("system")
+    # `system_extra` is how the bench swaps prompt variants without forking the
+    # pipeline. Empty in normal use, so the shipped path is the measured one.
+    system = _read_prompt("system") + system_extra
     user = build_user_prompt(config, difficulty, exclude_titles=exclude_titles)
     result = GenerationResult(question=None)
 
