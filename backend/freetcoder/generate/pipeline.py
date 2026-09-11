@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..formats import FormatConfig
-from ..llm import LLMClient, LLMError
+from ..llm import LLMClient, LLMError, telemetry
 from ..models import (
     Difficulty,
     GatedQuestion,
@@ -186,9 +186,11 @@ async def generate_question(
             else f"asking for a fresh question (attempt {attempt + 1})"
         )
         try:
-            candidate = await client.complete_json(
-                system=system, user=user, schema=GeneratedQuestion, temperature=0.8
-            )
+            with telemetry.stage("generate"):
+                candidate = await client.complete_json(
+                    system=system, user=user, schema=GeneratedQuestion,
+                    temperature=0.8,
+                )
         except LLMError as exc:
             report_to(f"the model did not answer usefully: {exc}"[:200], kind="warn")
             result.attempts.append(

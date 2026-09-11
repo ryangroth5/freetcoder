@@ -17,6 +17,7 @@ from typing import Any, TypeVar
 from openai import APIError, AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
+from . import telemetry
 from .base import LLMError
 
 log = logging.getLogger(__name__)
@@ -84,7 +85,16 @@ class OpenAICompatibleClient:
                     f"{user}\n\nYour previous reply did not validate. Fix exactly "
                     f"these problems and return the whole object again:\n{exc}"
                 )
-                log.warning("LLM output failed validation (attempt %d)", attempt + 1)
+                # Name the fields. "failed validation" alone leaves you
+                # guessing which of fourteen fields the model got wrong, which
+                # is the difference between a fixable prompt and a mystery.
+                fields = ", ".join(
+                    ".".join(str(p) for p in err["loc"]) for err in exc.errors()[:5]
+                )
+                log.warning(
+                    "LLM output failed validation (attempt %d): %s",
+                    attempt + 1, fields or "unknown field",
+                )
             except (APIError, json.JSONDecodeError, ValueError) as exc:
                 last = exc
                 log.warning("LLM request failed (attempt %d): %s", attempt + 1, exc)
@@ -314,15 +324,22 @@ class OpenAICompatibleClient:
         else:
             kwargs["response_format"] = {"type": "json_object"}
 
-        try:
-            resp = await self._client.chat.completions.create(**kwargs)
-        except APIError:
-            if mode != "json_schema":
-                raise
-            # Endpoint does not support json_schema at all: retry unconstrained
-            # rather than burning the attempt.
-            kwargs["response_format"] = {"type": "json_object"}
-            resp = await self._client.chat.completions.create(**kwargs)
+        with telemetry.record(self._model, mode) as entry:
+            try:
+                resp = await self._client.chat.completions.create(**kwargs)
+            except APIError:
+                if mode != "json_schema":
+                    raise
+                # Endpoint does not support json_schema at all: retry
+                # unconstrained rather than burning the attempt.
+                kwargs["response_format"] = {"type": "json_object"}
+                entry.mode = "json_object"
+                resp = await self._client.chat.completions.create(**kwargs)
+
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                entry.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
 
         # An OpenAI-compatible gateway can answer 200 with an error payload and
         # no `choices` at all -- rate limits and upstream provider failures both

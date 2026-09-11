@@ -96,6 +96,11 @@ class QualityReport:
     outcome: str = ""
     repairs_used: int = 0
     accepted_first_pass: bool = False
+    #: Wall clock for the whole question, and the part spent waiting on the
+    #: provider. The gap between them is our own sandbox work.
+    seconds: float = 0.0
+    provider_seconds: float = 0.0
+    completion_tokens: int = 0
 
     @property
     def looks_recalled(self) -> bool:
@@ -212,5 +217,14 @@ class Scorecard:
             ),
             "mean_repairs": round(
                 sum(r.repairs_used for r in self.reports) / n if n else 0.0, 2
+            ),
+            "median_seconds": (
+                sorted(r.seconds for r in self.reports)[n // 2] if n else 0.0
+            ),
+            "median_llm_s": (
+                sorted(r.provider_seconds for r in self.reports)[n // 2] if n else 0.0
+            ),
+            "median_tokens": (
+                sorted(r.completion_tokens for r in self.reports)[n // 2] if n else 0
             ),
         }
