@@ -467,3 +467,49 @@ It roughly doubles generation time and tokens: a second solve, plus running it.
 because the alternative is questions you cannot fairly answer, and the
 acceptance-rate report lists its rejections separately so its value stays
 measurable rather than assumed.
+
+---
+
+## Experiment log: monolithic versus staged generation
+
+Real measurements, 2026-09-11, against OpenRouter. Recorded because they cost
+money to obtain and because two of them contradict what we assumed.
+
+**Monolithic (the shipped path), glm-4.6 — 0 of 4 accepted.** 50-292s each, and
+**13 schema-validation retries**. Failures: `schema_invalid` x3,
+`prose_too_thin` x3, `perf_not_discriminating` x1.
+
+**Staged (`generate/staged.py`), glm-4.6 — 1 of 3 accepted.** 567-885s each,
+**zero** schema-validation retries, ~47k completion tokens for the accepted one.
+
+Single call, same prompt, three models:
+
+| model | time | output | statement | title |
+|---|---|---|---|---|
+| deepseek-v4.1-flash | 334s | 7642 ch | 1185 ch | *Longest Subarray Summing to K* |
+| kimi-k2.5 | 511s | 4571 ch | 136 ch | *count-subarrays-divisible-by-k* |
+| glm-4.6 | 52s | 5611 ch | 155 ch | *Longest Subarray with Sum K* |
+
+### What this overturned
+
+- **Gate latency is irrelevant.** 858.3 of 858.7 seconds was provider time; the
+  14-18 sandboxed processes are 0.05% of a question. Optimising the gate would
+  have been wasted effort, and we were about to.
+- **Output volume is not the driver.** Staged generated *one* language instead
+  of three and was slower, with roughly ten times the completion tokens.
+- **The 14-field schema is a failure amplifier.** Thirteen validation retries
+  against zero for four narrow schemas is the clearest signal in the set.
+- **Recall is ours, not the model's.** Four topic-only prompts across three
+  models returned the same memorised problem, and kimi emitted a URL slug as a
+  title. A single local scenario seed -- no model call -- produced the only
+  original question of the session.
+- **The two strategies fail differently.** Monolithic fails on prose and
+  schema; staged fails on code. That suggests the seam is prose-versus-code
+  rather than one-call-versus-many.
+
+### Caveat on the staged numbers
+
+`staged.py` did not validate anything in-stage when these were taken, despite
+its docstring saying otherwise. Both staged failures were caught by the gate
+after all four stages ran, so the strategy was measured without the localised
+failure that is its whole point. Treat 1-of-3 as a floor, not a verdict.
