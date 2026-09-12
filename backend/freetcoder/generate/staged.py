@@ -151,8 +151,13 @@ async def _ask[M: BaseModel](
     raise LLMError(f"stage {name!r} failed: {outcome.error}")
 
 
-def _reference_fault(
-    draft: ReferenceDraft, statement: StatementDraft, language: Language
+def reference_fault(
+    *,
+    scaffold: str,
+    reference_solution: str,
+    function_name: str,
+    visible_tests: list[TestCase],
+    language: Language,
 ) -> str:
     """Does this solution actually parse, and produce the examples it claims?
 
@@ -160,14 +165,14 @@ def _reference_fault(
     a second and it is the difference between a stage that catches its own
     mistakes and one that hands them downstream.
     """
-    syntax = check_syntax(language, draft.scaffold)
+    syntax = check_syntax(language, scaffold)
     if syntax.verdict is not Verdict.OK:
         return f"the scaffold does not parse: {syntax.stderr.strip()[:200]}"
 
     verdict, results, stderr = _run_cases(
-        draft.reference_solution,
-        statement.function_name,
-        list(draft.visible_tests),
+        reference_solution,
+        function_name,
+        list(visible_tests),
         REFERENCE_LIMITS,
         language,
     )
@@ -177,7 +182,7 @@ def _reference_fault(
             + _failure_detail(verdict, results, stderr)
         )
 
-    for case, got in zip(draft.visible_tests, results, strict=False):
+    for case, got in zip(visible_tests, results, strict=False):
         if not got.ok:
             return f"the reference failed on {case.args}: {got.error}"
         if not values_equal(got.value, case.expected):
@@ -254,7 +259,13 @@ async def generate_staged(
             temperature=0.2,
             tries=tries_per_stage,
             outcomes=result.stages,
-            check=lambda draft: _reference_fault(draft, statement, language),
+            check=lambda draft: reference_fault(
+                scaffold=draft.scaffold,
+                reference_solution=draft.reference_solution,
+                function_name=statement.function_name,
+                visible_tests=list(draft.visible_tests),
+                language=language,
+            ),
         )
 
         report_to("deriving the constraints")
@@ -310,5 +321,121 @@ async def generate_staged(
         visible_tests=reference.visible_tests,
         hidden_generator_py=harness.hidden_generator_py,
         brute_force_py=harness.brute_force_py,
+    )
+    return result
+
+
+class FlatDraft(BaseModel):
+    """Everything except the constraints, with nothing nested that models fumble.
+
+    The signature is flat -- `function_name`, `scaffold`, `reference_solution`
+    at top level -- because `signatures` as a list of objects is where the shape
+    failures land. Captured from a live provider: it simply does not produce
+    that list, it writes the fields flat and we rejected the result.
+
+    `visible_tests` stays nested because models produce it reliably; the
+    failures there were wrong *values*, which execution catches.
+
+    `clarifications` is dropped from this call entirely. It was the other
+    reliable source of shape failures, and it is optional to a valid question.
+    """
+
+    title: str = Field(min_length=3, max_length=120)
+    statement_md: str = Field(min_length=200)
+    function_name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    scaffold: str = Field(min_length=10)
+    reference_solution: str = Field(min_length=20)
+    visible_tests: list[TestCase] = Field(min_length=1, max_length=4)
+    hidden_generator_py: str = Field(min_length=20)
+    brute_force_py: str | None = None
+    topics: list[str] = Field(default_factory=list, max_length=8)
+
+
+async def generate_flat(
+    client: LLMClient,
+    config: FormatConfig,
+    *,
+    difficulty: Difficulty | None = None,
+    language: Language = Language.PYTHON,
+    tries_per_stage: int = 2,
+    scenario: str | None = None,
+    rng: random.Random | None = None,
+    report_to: Reporter = NULL_REPORTER,
+) -> StagedResult:
+    """One wide call with no nested signature, then constraints on their own.
+
+    The middle option between one fourteen-field request and four narrow ones.
+    Measured, every shape failure landed in a nested list, so this removes the
+    lists rather than the breadth -- two calls instead of four, while the main
+    call still validates its own reference before anything downstream runs.
+    """
+    difficulty = difficulty or config.session.difficulty_for(0)
+    chosen = scenario or pick(rng)
+    result = StagedResult(scenario=chosen)
+    style = _read_prompt(config.generation.style)
+    brief = _brief(config, difficulty, chosen)
+
+    try:
+        report_to("writing the question")
+        draft = await _ask(
+            client,
+            name="question",
+            system=_read_prompt("stage_flat"),
+            user=(
+                f"{style}\n\n{brief}\n\n"
+                f"Target language: {language.value}.\n"
+                f"Show {config.environment.visible_tests} worked example(s).\n"
+                f"Produce at least {config.scoring.hidden_test_count} hidden cases."
+            ),
+            schema=FlatDraft,
+            temperature=0.8,
+            tries=tries_per_stage,
+            outcomes=result.stages,
+            check=lambda d: reference_fault(
+                scaffold=d.scaffold,
+                reference_solution=d.reference_solution,
+                function_name=d.function_name,
+                visible_tests=list(d.visible_tests),
+                language=language,
+            ),
+        )
+
+        report_to("deriving the constraints")
+        constraints = await _ask(
+            client,
+            name="constraints",
+            system=_read_prompt("stage_constraints"),
+            user=(
+                f"# {draft.title}\n\n{draft.statement_md}\n\n"
+                f"Reference solution:\n\n```\n{draft.reference_solution}\n```\n\n"
+                f"Parameters: "
+                f"{', '.join(sorted({k for t in draft.visible_tests for k in t.args}))}"
+            ),
+            schema=ConstraintsDraft,
+            temperature=0.2,
+            tries=tries_per_stage,
+            outcomes=result.stages,
+        )
+    except LLMError:
+        return result
+
+    result.question = GeneratedQuestion(
+        title=draft.title,
+        difficulty=difficulty,
+        topics=draft.topics or list(config.generation.topics),
+        statement_md=draft.statement_md,
+        constraints_md=constraints.constraints_md,
+        constraints=constraints.constraints,
+        signatures=[
+            Signature(
+                language=language,
+                function_name=draft.function_name,
+                scaffold=draft.scaffold,
+                reference_solution=draft.reference_solution,
+            )
+        ],
+        visible_tests=draft.visible_tests,
+        hidden_generator_py=draft.hidden_generator_py,
+        brute_force_py=draft.brute_force_py,
     )
     return result

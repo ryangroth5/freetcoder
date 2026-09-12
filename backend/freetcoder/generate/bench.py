@@ -29,7 +29,7 @@ from .gate import validate_question
 from .pipeline import generate_question
 from .quality import Scorecard, score_question
 from .scenarios import pick as pick_scenario
-from .staged import generate_staged
+from .staged import generate_flat, generate_staged
 
 PROMPTS = Path(__file__).parent / "prompts"
 
@@ -104,8 +104,9 @@ async def run_variant(
         started = time.monotonic()
         card.attempted += 1
         with telemetry.collecting() as calls:
-            if strategy == "staged":
-                staged = await generate_staged(
+            if strategy in {"staged", "flat"}:
+                build = generate_staged if strategy == "staged" else generate_flat
+                staged = await build(
                     client, config, difficulty=Difficulty.MEDIUM,
                     language=Language.PYTHON, tries_per_stage=max(1, attempts),
                     scenario=scenario or None,
@@ -196,7 +197,7 @@ async def main() -> int:
     parser.add_argument("--sufficiency", action="store_true",
                         help="also run the second-model check (doubles the time)")
     parser.add_argument("--strategies", default="monolithic",
-                        help="comma-separated: monolithic,staged")
+                        help="comma-separated: monolithic,flat,staged")
     parser.add_argument("--models", default="",
                         help="comma-separated model slugs; blank uses the configured one")
     parser.add_argument("--seed-scenario", action="store_true",

@@ -258,3 +258,69 @@ class TestTheReferenceStageChecksItself:
         assert result.failed_stage == "reference"
         # Constraints and harness were never asked for.
         assert [s.name for s in result.stages] == ["statement", "reference"]
+
+
+FLAT = {
+    "title": "Steady Tide Windows",
+    "statement_md": STATEMENT["statement_md"],
+    "function_name": "steady_window",
+    "scaffold": REFERENCE["scaffold"],
+    "reference_solution": REFERENCE["reference_solution"],
+    "visible_tests": REFERENCE["visible_tests"],
+    "hidden_generator_py": HARNESS["hidden_generator_py"],
+    "brute_force_py": HARNESS["brute_force_py"],
+    "topics": ["sliding window"],
+}
+
+
+class TestTheFlatStrategy:
+    """One wide call with no nested signature, then constraints on their own.
+
+    Every shape failure measured against a live provider landed in a nested
+    list -- `signatures`, `constraints[].name`, `clarifications[].answer`. This
+    removes the lists rather than the breadth.
+    """
+
+    async def test_two_calls_produce_a_gate_valid_question(self) -> None:
+        from freetcoder.generate.staged import generate_flat
+
+        llm = FakeLLM([FLAT, CONSTRAINTS])
+        result = await generate_flat(llm, config(), rng=random.Random(0))
+        assert result.question is not None, result.failed_stage
+        assert validate_question(result.question).outcome is GateOutcome.ACCEPTED
+
+    async def test_it_costs_two_calls_not_four(self) -> None:
+        from freetcoder.generate.staged import generate_flat
+
+        llm = FakeLLM([FLAT, CONSTRAINTS])
+        result = await generate_flat(llm, config(), rng=random.Random(0))
+        assert result.question is not None
+        assert [s.name for s in result.stages] == ["question", "constraints"]
+        assert len(llm.calls) == 2
+
+    async def test_the_main_call_validates_its_own_reference(self) -> None:
+        """The flat draft still checks itself before constraints are derived."""
+        from freetcoder.generate.staged import generate_flat
+
+        wrong = dict(FLAT)
+        wrong["reference_solution"] = (
+            "def steady_window(levels, drift):\n    return 999\n"
+        )
+        llm = FakeLLM([wrong, FLAT, CONSTRAINTS])
+        result = await generate_flat(
+            llm, config(), tries_per_stage=2, rng=random.Random(0)
+        )
+        assert result.question is not None, result.failed_stage
+        by_name = {s.name: s for s in result.stages}
+        assert by_name["question"].attempts == 2
+        assert by_name["constraints"].attempts == 1
+
+    async def test_the_scenario_reaches_the_prompt(self) -> None:
+        from freetcoder.generate.staged import generate_flat
+
+        llm = FakeLLM([FLAT, CONSTRAINTS])
+        await generate_flat(
+            llm, config(), scenario="a locksmith recording key cuttings",
+            rng=random.Random(0),
+        )
+        assert "a locksmith recording key cuttings" in llm.calls[0][1]
