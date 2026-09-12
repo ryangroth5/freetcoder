@@ -9,9 +9,9 @@ a field the gate has to defend.
 from __future__ import annotations
 
 import enum
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Difficulty(enum.StrEnum):
@@ -93,8 +93,95 @@ class Signature(BaseModel):
     reference_solution: str = Field(description="A known-correct implementation")
 
 
+def _pair(value: object) -> tuple[float | None, float | None]:
+    """`[lo, hi]` as models write bounds, in either order."""
+    if isinstance(value, list | tuple) and len(value) == 2:
+        lo, hi = value
+        if isinstance(lo, int | float) and isinstance(hi, int | float):
+            return (min(lo, hi), max(lo, hi))
+    return (None, None)
+
+
+def _normalise_constraint(raw: dict[str, object]) -> dict[str, object]:
+    """Accept `size`/`value_range` alongside our own field names."""
+    out = dict(raw)
+    kind = str(raw.get("type") or "").lower()
+    collection = kind in {"array", "list", "string", "str"} or "length" in str(
+        raw.get("name", "")
+    ).lower()
+
+    lo, hi = _pair(raw.get("size") or raw.get("length"))
+    if lo is not None:
+        out.setdefault("min_length", int(lo))
+        out.setdefault("max_length", int(hi))  # type: ignore[arg-type]
+
+    lo, hi = _pair(raw.get("value_range") or raw.get("range"))
+    if lo is not None:
+        # For a collection the range describes its elements; for a scalar it
+        # describes the value itself. Getting this backwards would silently
+        # mis-bound every generated case.
+        if collection or "min_length" in out:
+            out.setdefault("element_min", lo)
+            out.setdefault("element_max", hi)
+        else:
+            out.setdefault("min", lo)
+            out.setdefault("max", hi)
+    return out
+
+
 class GeneratedQuestion(BaseModel):
     """A question as the LLM produces it -- untrusted until the gate passes it."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_the_natural_shape(cls, data: Any) -> Any:
+        """Take the shape models actually emit, not only the one we asked for.
+
+        Measured against a real provider: with `strict: False` the schema is a
+        hint, and the model returns a perfectly good question in its own
+        shape -- the signature flattened to top level, `difficulty: "Medium"`,
+        bounds as `size: [lo, hi]` and `value_range: [lo, hi]`, an example's
+        note under `description`. Every one of those was a rejection, and the
+        question inside was usually fine.
+
+        Rejecting a good question over its nesting is a bug in us, not the
+        model. This is also the cheapest route to model-agnosticism: the same
+        drift shows up across providers because the flat shape is simply the
+        obvious one.
+        """
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+
+        # "Medium" -> "medium". A three-value enum is not worth a retry.
+        if isinstance(d.get("difficulty"), str):
+            d["difficulty"] = d["difficulty"].strip().lower()
+
+        # A signature flattened to top level, which is what models default to
+        # when only one language was asked for.
+        if not d.get("signatures") and d.get("reference_solution"):
+            d["signatures"] = [{
+                "language": str(d.get("language") or "python").strip().lower(),
+                "function_name": d.get("function_name") or "solve",
+                "scaffold": d.get("scaffold") or "",
+                "reference_solution": d["reference_solution"],
+            }]
+
+        # Only dicts need translating. Constraints already built as models --
+        # the staged pipeline constructs them directly -- must pass through
+        # untouched, or they are silently dropped.
+        d["constraints"] = [
+            _normalise_constraint(c) if isinstance(c, dict) else c
+            for c in (d.get("constraints") or [])
+        ]
+
+        for case in d.get("visible_tests") or []:
+            if isinstance(case, dict) and "explanation" not in case:
+                note = case.get("description") or case.get("note")
+                if note:
+                    case["explanation"] = note
+        return d
+
 
     title: Annotated[str, Field(min_length=3, max_length=120)]
     difficulty: Difficulty

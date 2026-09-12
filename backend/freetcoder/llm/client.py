@@ -70,10 +70,21 @@ class OpenAICompatibleClient:
         # attempt. Looping over range(0) made a configured 0 do nothing at all
         # and report "no valid response after 0 attempts: None".
         for attempt in range(max(1, self._max_retries)):
-            # Only the first attempt asks for a strict schema. If the provider
-            # rejected it or produced junk, loosening the ask beats hammering
-            # the same request that already failed.
-            mode = "json_schema" if attempt == 0 else "json_object"
+            # Stay schema-constrained on every attempt.
+            #
+            # This used to drop to json_object after the first failure, on the
+            # theory that loosening the ask beat repeating a failed request.
+            # Measured, it does the opposite: a validation failure is usually
+            # transient, and the unconstrained retry then has to hit a
+            # fourteen-field shape unaided. The failures scattered across
+            # unrelated fields -- `difficulty` (a three-value enum), `title` (a
+            # string), `signatures.0.*` -- which is what an unguided model
+            # produces, not one that cannot write prose.
+            #
+            # _request still falls back to json_object on its own if the
+            # provider *rejects* json_schema outright, which is the case the
+            # old rule was really aiming at.
+            mode = "json_schema"
             try:
                 raw = await self._request(system, user, schema, temperature, mode)
                 return schema.model_validate_json(_extract_json(raw))
