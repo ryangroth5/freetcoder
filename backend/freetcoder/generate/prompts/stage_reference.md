@@ -21,3 +21,9 @@ Language conventions:
 
 If the statement is ambiguous about a case your solution has to handle, pick the
 reading the examples support and stay consistent with it.
+
+## Code must have real line breaks
+
+Every code string -- `scaffold`, `reference_solution`, `hidden_generator_py`, `brute_force_py` -- must contain real newlines, escaped as `\n` inside the JSON string, with one statement per line and proper indentation.
+
+Do not flatten a function onto one line. Python indentation is syntax: a solution written as `def f(x):  y = 1  return y` does not run, and the question is discarded.

@@ -383,3 +383,98 @@ class TestTheProseIsCheckedInStage:
         assert prose_fault("mentions levels and drift", ["levels", "drift"]) == ""
         fault = prose_fault("mentions levels only", ["levels", "drift"])
         assert "drift" in fault
+
+
+class TestConstraintCoverageIsCheckedInStage:
+    """A statement can name every parameter and still arrive unbounded.
+
+    That is the gate's third prose rule, and the in-stage statement check does
+    not cover it -- which is why prose_too_thin survived that fix in a measured
+    run. An empty or partial constraints list also makes the gate's case
+    checking pass vacuously, so it is not cosmetic.
+    """
+
+    async def test_a_missing_bound_is_retried_in_stage(self) -> None:
+        from freetcoder.generate.staged import generate_flat
+
+        partial = {
+            "constraints_md": "- `0 <= levels.length <= 1000`",
+            "constraints": [
+                {"name": "levels", "min_length": 0, "max_length": 1000},
+            ],
+        }
+        llm = FakeLLM([FLAT, partial, CONSTRAINTS])
+        result = await generate_flat(
+            llm, config(), tries_per_stage=2, rng=random.Random(0)
+        )
+        assert result.question is not None, result.failed_stage
+        assert {s.name: s for s in result.stages}["constraints"].attempts == 2
+
+    async def test_the_unbounded_parameter_is_named(self) -> None:
+        from freetcoder.generate.staged import ConstraintsDraft, constraints_fault
+
+        draft = ConstraintsDraft(
+            constraints_md="- `0 <= levels.length <= 1000`",
+            constraints=[{"name": "levels", "min_length": 0, "max_length": 1000}],
+        )
+        fault = constraints_fault(draft, ["levels", "drift"])
+        assert "drift" in fault and "levels" not in fault
+
+    async def test_full_coverage_passes(self) -> None:
+        from freetcoder.generate.staged import ConstraintsDraft, constraints_fault
+
+        draft = ConstraintsDraft(
+            constraints_md=CONSTRAINTS["constraints_md"],
+            constraints=CONSTRAINTS["constraints"],
+        )
+        assert constraints_fault(draft, ["levels", "drift"]) == ""
+
+
+class TestFlattenedCodeIsNamed:
+    """Observed from deepseek-chat: the whole reference arrives on one line.
+
+        def max_fruits(tree):  # sliding window  left = 0  res = 0  for ...
+
+    Line breaks replaced by double spaces. For Python that is fatal -- and
+    unrepairable, since the block structure is gone. It surfaces as a
+    SyntaxError at import that says nothing about the real cause.
+    """
+
+    def test_a_flattened_function_is_detected(self) -> None:
+        from freetcoder.generate.staged import flattened_code_fault
+
+        flat = (
+            "def max_fruits(tree):  # sliding window  left = 0  res = 0  "
+            "count = {}  for right, num in enumerate(tree):    count[num] = 1  "
+            "return res"
+        )
+        fault = flattened_code_fault(flat, Language.PYTHON)
+        assert "single line" in fault
+        assert "indentation is syntax" in fault
+
+    def test_real_code_is_not_flagged(self) -> None:
+        from freetcoder.generate.staged import flattened_code_fault
+
+        assert flattened_code_fault(REFERENCE["reference_solution"],
+                                    Language.PYTHON) == ""
+
+    def test_a_one_line_body_is_not_flagged(self) -> None:
+        """`def f(x): return x` is legal Python; do not reject it."""
+        from freetcoder.generate.staged import flattened_code_fault
+
+        assert flattened_code_fault("def f(x): return x", Language.PYTHON) == ""
+
+    async def test_it_is_caught_in_stage_and_retried(self) -> None:
+        from freetcoder.generate.staged import generate_flat
+
+        flat = dict(FLAT)
+        flat["reference_solution"] = (
+            "def steady_window(levels, drift):  best = 0  "
+            "for i in range(len(levels)):    best = 1  return best"
+        )
+        llm = FakeLLM([flat, FLAT, CONSTRAINTS])
+        result = await generate_flat(
+            llm, config(), tries_per_stage=2, rng=random.Random(0)
+        )
+        assert result.question is not None, result.failed_stage
+        assert {s.name: s for s in result.stages}["question"].attempts == 2

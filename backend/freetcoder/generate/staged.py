@@ -172,6 +172,59 @@ def prose_fault(statement_md: str, parameters: list[str]) -> str:
     return ""
 
 
+def constraints_fault(
+    draft: ConstraintsDraft, parameters: list[str]
+) -> str:
+    """Is there a bound for every parameter?
+
+    The gate's third prose rule, and the one the in-stage statement check does
+    not cover: a statement can name every parameter and still arrive with no
+    bound for one of them. An empty or partial constraints list also makes the
+    gate's case checking pass vacuously, so this is not cosmetic.
+    """
+    named = {c.name for c in draft.constraints}
+    missing = [p for p in parameters if p not in named]
+    if missing:
+        return (
+            "no bound given for "
+            + ", ".join(repr(p) for p in missing)
+            + "; every parameter needs one entry in `constraints`, named exactly"
+        )
+    if not draft.constraints_md.strip():
+        return "constraints_md is empty; the candidate reads that, not the data"
+    return ""
+
+
+#: Statements that only make sense on their own line. If several appear with no
+#: newline between them, the code arrived flattened.
+_BLOCK_HINTS = ("  return ", "  for ", "  while ", "  if ", "  res ", "  count")
+
+
+def flattened_code_fault(source: str, language: Language) -> str:
+    """Did the newlines survive the JSON round trip?
+
+    Observed from deepseek-chat: an entire reference solution arrives on one
+    line, with line breaks replaced by double spaces --
+
+        def max_fruits(tree):  # sliding window  left = 0  res = 0  for ...
+
+    For Python that is fatal, because indentation is syntax, and it is not
+    safely repairable: the original block structure is gone. It fails at import
+    with a SyntaxError that says nothing about the real cause, so name it.
+    """
+    if "\n" in source.strip():
+        return ""
+    if language is Language.PYTHON and source.count(":") and any(
+        hint in source for hint in _BLOCK_HINTS
+    ):
+        return (
+            "the code arrived on a single line with no line breaks -- Python "
+            "indentation is syntax, so it cannot run. Emit real newlines inside "
+            "the JSON string (escaped as \\n), one statement per line, indented."
+        )
+    return ""
+
+
 def reference_fault(
     *,
     scaffold: str,
@@ -186,6 +239,11 @@ def reference_fault(
     a second and it is the difference between a stage that catches its own
     mistakes and one that hands them downstream.
     """
+    # Cheapest first, and the one whose SyntaxError explains nothing.
+    for label, code in (("scaffold", scaffold), ("reference", reference_solution)):
+        if fault := flattened_code_fault(code, language):
+            return f"{label}: {fault}"
+
     syntax = check_syntax(language, scaffold)
     if syntax.verdict is not Verdict.OK:
         return f"the scaffold does not parse: {syntax.stderr.strip()[:200]}"
@@ -304,6 +362,7 @@ async def generate_staged(
             temperature=0.2,
             tries=tries_per_stage,
             outcomes=result.stages,
+            check=lambda c: constraints_fault(c, list(statement.parameter_names)),
         )
 
         report_to("building the hidden tests")
@@ -425,6 +484,7 @@ async def generate_flat(
             ),
         )
 
+        parameters = sorted({k for t in draft.visible_tests for k in t.args})
         report_to("deriving the constraints")
         constraints = await _ask(
             client,
@@ -433,13 +493,13 @@ async def generate_flat(
             user=(
                 f"# {draft.title}\n\n{draft.statement_md}\n\n"
                 f"Reference solution:\n\n```\n{draft.reference_solution}\n```\n\n"
-                f"Parameters: "
-                f"{', '.join(sorted({k for t in draft.visible_tests for k in t.args}))}"
+                f"Parameters: {', '.join(parameters)}"
             ),
             schema=ConstraintsDraft,
             temperature=0.2,
             tries=tries_per_stage,
             outcomes=result.stages,
+            check=lambda c: constraints_fault(c, parameters),
         )
     except LLMError:
         return result
