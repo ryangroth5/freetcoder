@@ -324,3 +324,62 @@ class TestTheFlatStrategy:
             rng=random.Random(0),
         )
         assert "a locksmith recording key cuttings" in llm.calls[0][1]
+
+
+class TestTheProseIsCheckedInStage:
+    """prose_too_thin was the dominant rejection in every measured run.
+
+    By the time the gate says so, the reference, generator and brute force have
+    all been written for a question that was never going to be served. The
+    check is deterministic and free, so it belongs where it can be fixed for
+    one small call.
+    """
+
+    async def test_a_statement_that_omits_a_parameter_is_retried(self) -> None:
+        from freetcoder.generate.staged import generate_flat
+
+        vague = dict(FLAT)
+        # Long enough to pass the schema, so the prose check is what rejects
+        # it: it describes the task without ever naming what it is handed.
+        vague["statement_md"] = (
+            "Return the length of the longest steady run of readings taken in "
+            "order. A run counts as steady when the difference between its "
+            "highest and its lowest reading is no greater than the tolerance "
+            "allowed. Return the number of readings in the longest such run. "
+            "When there are no readings at all, return 0. A single reading is "
+            "always steady, whatever tolerance applies to it."
+        )
+        llm = FakeLLM([vague, FLAT, CONSTRAINTS])
+        result = await generate_flat(
+            llm, config(), tries_per_stage=2, rng=random.Random(0)
+        )
+        assert result.question is not None, result.failed_stage
+        assert {s.name: s for s in result.stages}["question"].attempts == 2
+
+    async def test_the_missing_parameter_is_named_on_the_retry(self) -> None:
+        from freetcoder.generate.staged import generate_flat
+
+        vague = dict(FLAT)
+        # Long enough to pass the schema, so the prose check is what rejects
+        # it: it describes the task without ever naming what it is handed.
+        vague["statement_md"] = (
+            "Return the length of the longest steady run of readings taken in "
+            "order. A run counts as steady when the difference between its "
+            "highest and its lowest reading is no greater than the tolerance "
+            "allowed. Return the number of readings in the longest such run. "
+            "When there are no readings at all, return 0. A single reading is "
+            "always steady, whatever tolerance applies to it."
+        )
+        llm = FakeLLM([vague, FLAT, CONSTRAINTS])
+        await generate_flat(llm, config(), tries_per_stage=2, rng=random.Random(0))
+
+        retry = llm.calls[1][1]
+        assert "levels" in retry and "drift" in retry
+
+    async def test_prose_is_checked_before_the_reference_is_run(self) -> None:
+        """The free check should not wait behind a sandboxed execution."""
+        from freetcoder.generate.staged import prose_fault
+
+        assert prose_fault("mentions levels and drift", ["levels", "drift"]) == ""
+        fault = prose_fault("mentions levels only", ["levels", "drift"])
+        assert "drift" in fault

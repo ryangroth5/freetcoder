@@ -151,6 +151,27 @@ async def _ask[M: BaseModel](
     raise LLMError(f"stage {name!r} failed: {outcome.error}")
 
 
+def prose_fault(statement_md: str, parameters: list[str]) -> str:
+    """Does the prose describe what the candidate is handed?
+
+    The same rule the gate applies, run here where it costs one small call to
+    fix instead of the whole question. `prose_too_thin` was the dominant
+    rejection in every measured run, and by the time the gate says so the
+    reference, generator and brute force have all been written for nothing.
+
+    Deterministic and free -- no model, no sandbox.
+    """
+    body = statement_md.lower()
+    missing = [p for p in parameters if p.lower() not in body]
+    if missing:
+        return (
+            "the statement never mentions "
+            + ", ".join(repr(p) for p in missing)
+            + "; name and describe every parameter in the prose"
+        )
+    return ""
+
+
 def reference_fault(
     *,
     scaffold: str,
@@ -240,6 +261,7 @@ async def generate_staged(
             temperature=0.9,
             tries=tries_per_stage,
             outcomes=result.stages,
+            check=lambda d: prose_fault(d.statement_md, list(d.parameter_names)),
         )
 
         shown = (
@@ -391,7 +413,10 @@ async def generate_flat(
             temperature=0.8,
             tries=tries_per_stage,
             outcomes=result.stages,
-            check=lambda d: reference_fault(
+            check=lambda d: prose_fault(
+                d.statement_md,
+                sorted({k for t in d.visible_tests for k in t.args}),
+            ) or reference_fault(
                 scaffold=d.scaffold,
                 reference_solution=d.reference_solution,
                 function_name=d.function_name,
