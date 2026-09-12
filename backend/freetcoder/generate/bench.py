@@ -28,6 +28,7 @@ from ..settings import get_settings
 from .gate import validate_question
 from .pipeline import generate_question
 from .quality import Scorecard, score_question
+from .scenarios import pick as pick_scenario
 from .staged import generate_staged
 
 PROMPTS = Path(__file__).parent / "prompts"
@@ -82,18 +83,24 @@ def _client(model: str | None) -> LLMClient:
 
 async def run_variant(
     variant: str, count: int, *, attempts: int, repairs: int, sufficiency: bool,
-    strategy: str = "monolithic", model: str | None = None,
+    strategy: str = "monolithic", model: str | None = None, seed: bool = False,
 ) -> Scorecard:
     settings = get_settings()
     client = _client(model)
     extra, exemplars = variant_prompt(variant)
     label = f"{strategy[:4]}/{variant}"
-    card = Scorecard(variant=f"{model or settings.llm_model}|{strategy}|{variant}")
+    card = Scorecard(
+        variant=f"{model or settings.llm_model}|{strategy}"
+        f"{'+seed' if seed else ''}|{variant}"
+    )
     titles: list[str] = []
 
     for i in range(count):
         style, topics = MATRIX[i % len(MATRIX)]
         config = resolve(style, topics=topics)
+        # The same seed feeds either strategy, so the anti-recall lever is
+        # measured independently of how the question is assembled.
+        scenario = pick_scenario() if seed else ""
         started = time.monotonic()
         card.attempted += 1
         with telemetry.collecting() as calls:
@@ -101,6 +108,7 @@ async def run_variant(
                 staged = await generate_staged(
                     client, config, difficulty=Difficulty.MEDIUM,
                     language=Language.PYTHON, tries_per_stage=max(1, attempts),
+                    scenario=scenario or None,
                 )
                 question = staged.question
                 # The staged path returns an unvalidated question; the gate is
@@ -122,7 +130,7 @@ async def run_variant(
                     client, config, difficulty=Difficulty.MEDIUM,
                     max_attempts=attempts, repair_rounds=repairs,
                     exclude_titles=titles, system_extra=extra,
-                    check_sufficiency=sufficiency,
+                    scenario=scenario, check_sufficiency=sufficiency,
                 )
                 question = result.question.question if result.question else None
                 outcome = (
@@ -191,6 +199,8 @@ async def main() -> int:
                         help="comma-separated: monolithic,staged")
     parser.add_argument("--models", default="",
                         help="comma-separated model slugs; blank uses the configured one")
+    parser.add_argument("--seed-scenario", action="store_true",
+                        help="give each question a concrete setting (anti-recall)")
     parser.add_argument("--out", type=Path, default=Path("bench-results.json"))
     args = parser.parse_args()
 
@@ -214,7 +224,7 @@ async def main() -> int:
                 cards.append(await run_variant(
                     variant, args.count, attempts=args.attempts,
                     repairs=args.repairs, sufficiency=args.sufficiency,
-                    strategy=strategy, model=model,
+                    strategy=strategy, model=model, seed=args.seed_scenario,
                 ))
 
     print_table(cards)

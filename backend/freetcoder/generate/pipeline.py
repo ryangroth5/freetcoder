@@ -25,6 +25,7 @@ from ..models import (
 from ..progress import NULL_REPORTER, Reporter
 from .gate import validate_question
 from .repair import repair_question
+from .scenarios import brief as scenario_brief
 from .sufficiency import check_statement_sufficiency
 
 log = logging.getLogger(__name__)
@@ -40,11 +41,17 @@ def _read_prompt(name: str) -> str:
 
 
 def build_user_prompt(
-    config: FormatConfig, difficulty: Difficulty, *, exclude_titles: list[str] | None = None
+    config: FormatConfig,
+    difficulty: Difficulty,
+    *,
+    exclude_titles: list[str] | None = None,
+    scenario: str = "",
 ) -> str:
     """Assemble the per-question instruction from the resolved format."""
     gen = config.generation
     parts: list[str] = [_read_prompt(gen.style)]
+    if scenario:
+        parts.append(scenario_brief(scenario))
 
     if gen.source == "imported" and gen.import_text:
         # Layered *after* the style so an imported question is still a LeetCode
@@ -163,6 +170,7 @@ async def generate_question(
     check_sufficiency: bool = True,
     exclude_titles: list[str] | None = None,
     system_extra: str = "",
+    scenario: str = "",
     report_to: Reporter = NULL_REPORTER,
 ) -> GenerationResult:
     """Produce one gate-approved question, or report why we could not.
@@ -175,7 +183,9 @@ async def generate_question(
     # `system_extra` is how the bench swaps prompt variants without forking the
     # pipeline. Empty in normal use, so the shipped path is the measured one.
     system = _read_prompt("system") + system_extra
-    user = build_user_prompt(config, difficulty, exclude_titles=exclude_titles)
+    user = build_user_prompt(
+        config, difficulty, exclude_titles=exclude_titles, scenario=scenario
+    )
     result = GenerationResult(question=None)
 
     for attempt in range(max_attempts):

@@ -193,3 +193,68 @@ async def test_every_stage_is_required(missing: str) -> None:
     )
     assert result.question is None
     assert result.failed_stage == missing
+
+
+class TestTheReferenceStageChecksItself:
+    """The mechanism staging exists for, and the one the first run lacked.
+
+    Without it a wrong reference is only caught by the gate, after constraints
+    and harness have already been generated against a solution that was never
+    going to work. Both failures in the first measured run were exactly that.
+    """
+
+    async def test_a_reference_that_contradicts_its_examples_is_retried(self) -> None:
+        wrong = dict(REFERENCE)
+        wrong["reference_solution"] = (
+            "def steady_window(levels, drift):\n    return 999\n"
+        )
+        llm = FakeLLM([STATEMENT, wrong, REFERENCE, CONSTRAINTS, HARNESS])
+
+        result = await generate_staged(
+            llm, config(), tries_per_stage=2, rng=random.Random(0)
+        )
+        assert result.question is not None, result.failed_stage
+        by_name = {s.name: s for s in result.stages}
+        assert by_name["reference"].attempts == 2
+        # The stage caught it, so the later stages ran once against a good one.
+        assert by_name["constraints"].attempts == 1
+
+    async def test_the_model_is_told_what_was_wrong(self) -> None:
+        """A bare retry corrects poorly; a concrete complaint corrects well."""
+        wrong = dict(REFERENCE)
+        wrong["reference_solution"] = (
+            "def steady_window(levels, drift):\n    return 999\n"
+        )
+        llm = FakeLLM([STATEMENT, wrong, REFERENCE, CONSTRAINTS, HARNESS])
+        await generate_staged(llm, config(), tries_per_stage=2, rng=random.Random(0))
+
+        retry_prompt = llm.calls[2][1]
+        assert "rejected" in retry_prompt
+        assert "999" in retry_prompt, "the actual wrong value should be quoted"
+
+    async def test_a_scaffold_that_does_not_parse_is_caught_here(self) -> None:
+        """scaffold_invalid was a real failure of the first run, found late."""
+        broken = dict(REFERENCE)
+        broken["scaffold"] = "def steady_window(levels, drift:\n"
+        llm = FakeLLM([STATEMENT, broken, REFERENCE, CONSTRAINTS, HARNESS])
+
+        result = await generate_staged(
+            llm, config(), tries_per_stage=2, rng=random.Random(0)
+        )
+        assert result.question is not None, result.failed_stage
+        assert {s.name: s for s in result.stages}["reference"].attempts == 2
+
+    async def test_an_unfixable_reference_stops_before_the_later_stages(self) -> None:
+        wrong = dict(REFERENCE)
+        wrong["reference_solution"] = (
+            "def steady_window(levels, drift):\n    return 999\n"
+        )
+        llm = FakeLLM([STATEMENT, wrong, wrong, CONSTRAINTS, HARNESS])
+
+        result = await generate_staged(
+            llm, config(), tries_per_stage=2, rng=random.Random(0)
+        )
+        assert result.question is None
+        assert result.failed_stage == "reference"
+        # Constraints and harness were never asked for.
+        assert [s.name for s in result.stages] == ["statement", "reference"]

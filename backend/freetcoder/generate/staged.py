@@ -20,6 +20,7 @@ models returned the same one -- and a concrete setting costs nothing to supply.
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
@@ -35,25 +36,14 @@ from ..models import (
     TestCase,
 )
 from ..progress import NULL_REPORTER, Reporter
+from ..runner.adapters import check_syntax
+from ..runner.types import Verdict
+from .gate import REFERENCE_LIMITS, _failure_detail, _run_cases
+from .harness import values_equal
 from .pipeline import _read_prompt
+from .scenarios import SCENARIOS, pick
 
-#: Settings a published problem does not already own. The point is not the
-#: domain itself but that it is not "arrays"; it displaces the search key.
-SCENARIOS: tuple[str, ...] = (
-    "a tide gauge logging sea levels",
-    "a warehouse picker walking one aisle",
-    "a nurse rota of shift swaps",
-    "a bakery tracking loaves through a day",
-    "a bike-share dock counting departures",
-    "a seismograph recording tremor amplitudes",
-    "a greenhouse logging overnight temperatures",
-    "a ferry timetable with sailings and delays",
-    "a library tracking loans and returns",
-    "a call centre logging queue lengths",
-    "a beekeeper weighing hives through a season",
-    "a locksmith recording key cuttings",
-)
-
+__all__ = ["SCENARIOS", "generate_staged"]
 
 class StatementDraft(BaseModel):
     """Stage 2: the prose, and nothing else."""
@@ -121,26 +111,81 @@ async def _ask[M: BaseModel](
     temperature: float,
     tries: int,
     outcomes: list[StageOutcome],
+    check: Callable[[M], str] | None = None,
 ) -> M:
-    """One stage, retried alone.
+    """One stage, validated here and retried alone.
 
-    This is the whole point of staging: a bad reference costs a reference call,
-    not the statement, constraints and harness that were already fine.
+    `check` returns "" for a good draft or a sentence saying what is wrong. That
+    sentence is appended to the prompt on the retry, because a model corrects
+    well from a concrete complaint and poorly from a bare second ask.
+
+    Validating *here* is the whole point of staging. Without it a bad reference
+    is only noticed by the gate, after the constraints and harness stages have
+    already been generated against a solution that was never going to work --
+    which is exactly what the first measured run did.
     """
     outcome = StageOutcome(name=name)
     outcomes.append(outcome)
+    ask = user
     last = ""
     for _ in range(tries):
         outcome.attempts += 1
         try:
             with telemetry.stage(name):
-                return await client.complete_json(
-                    system=system, user=user, schema=schema, temperature=temperature
+                draft = await client.complete_json(
+                    system=system, user=ask, schema=schema, temperature=temperature
                 )
         except LLMError as exc:
             last = str(exc)[:200]
+            continue
+
+        fault = check(draft) if check else ""
+        if not fault:
+            return draft
+        last = fault
+        ask = (
+            f"{user}\n\nYour previous answer was rejected: {fault}\n"
+            "Fix exactly that and return the whole object again."
+        )
     outcome.error = last or "no usable response"
     raise LLMError(f"stage {name!r} failed: {outcome.error}")
+
+
+def _reference_fault(
+    draft: ReferenceDraft, statement: StatementDraft, language: Language
+) -> str:
+    """Does this solution actually parse, and produce the examples it claims?
+
+    One sandboxed run, against the draft's own examples. It costs a fraction of
+    a second and it is the difference between a stage that catches its own
+    mistakes and one that hands them downstream.
+    """
+    syntax = check_syntax(language, draft.scaffold)
+    if syntax.verdict is not Verdict.OK:
+        return f"the scaffold does not parse: {syntax.stderr.strip()[:200]}"
+
+    verdict, results, stderr = _run_cases(
+        draft.reference_solution,
+        statement.function_name,
+        list(draft.visible_tests),
+        REFERENCE_LIMITS,
+        language,
+    )
+    if verdict is not Verdict.OK:
+        return (
+            "the reference did not run cleanly on your own examples: "
+            + _failure_detail(verdict, results, stderr)
+        )
+
+    for case, got in zip(draft.visible_tests, results, strict=False):
+        if not got.ok:
+            return f"the reference failed on {case.args}: {got.error}"
+        if not values_equal(got.value, case.expected):
+            return (
+                f"for {case.args} you claimed {case.expected!r} but your "
+                f"reference returns {got.value!r}; one of them is wrong"
+            )
+    return ""
 
 
 def _brief(config: FormatConfig, difficulty: Difficulty, scenario: str) -> str:
@@ -173,7 +218,7 @@ async def generate_staged(
 ) -> StagedResult:
     """Build a question stage by stage. Returns it unvalidated by the gate."""
     difficulty = difficulty or config.session.difficulty_for(0)
-    chosen = scenario or (rng or random).choice(SCENARIOS)
+    chosen = scenario or pick(rng)
     result = StagedResult(scenario=chosen)
     brief = _brief(config, difficulty, chosen)
     style = _read_prompt(config.generation.style)
@@ -209,6 +254,7 @@ async def generate_staged(
             temperature=0.2,
             tries=tries_per_stage,
             outcomes=result.stages,
+            check=lambda draft: _reference_fault(draft, statement, language),
         )
 
         report_to("deriving the constraints")
