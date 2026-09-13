@@ -26,6 +26,7 @@ from ..llm.client import OpenAICompatibleClient
 from ..models import Difficulty, GateOutcome, Language
 from ..settings import get_settings
 from .gate import validate_question
+from .module import generate_module
 from .pipeline import generate_question
 from .quality import Scorecard, score_question
 from .scenarios import pick as pick_scenario
@@ -104,11 +105,12 @@ async def run_variant(
         started = time.monotonic()
         card.attempted += 1
         with telemetry.collecting() as calls:
-            if strategy in {"staged", "flat", "delimited"}:
+            if strategy in {"staged", "flat", "delimited", "module"}:
                 build = {
                     "staged": generate_staged,
                     "flat": generate_flat,
                     "delimited": generate_delimited,
+                    "module": generate_module,
                 }[strategy]
                 staged = await build(
                     client, config, difficulty=Difficulty.MEDIUM,
@@ -206,7 +208,7 @@ async def main() -> int:
     parser.add_argument("--sufficiency", action="store_true",
                         help="also run the second-model check (doubles the time)")
     parser.add_argument("--strategies", default="monolithic",
-                        help="comma-separated: monolithic,flat,delimited,staged")
+                        help="comma-separated: monolithic,flat,delimited,staged,module")
     parser.add_argument("--models", default="",
                         help="comma-separated model slugs; blank uses the configured one")
     parser.add_argument("--seed-scenario", action="store_true",

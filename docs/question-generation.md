@@ -513,3 +513,61 @@ Single call, same prompt, three models:
 its docstring saying otherwise. Both staged failures were caught by the gate
 after all four stages ran, so the strategy was measured without the localised
 failure that is its whole point. Treat 1-of-3 as a floor, not a verdict.
+
+---
+
+## Experiment log, part two: it was the wire format
+
+Four days of measurement against OpenRouter (deepseek-chat, deepseek-v4.1-flash,
+glm-4.6, kimi-k2.5). Recorded because several results overturned assumptions we
+were about to act on.
+
+### What was actually wrong
+
+Every failure we chased turned out to be **serialisation**, not reasoning:
+
+| Observed | What it was |
+|---|---|
+| Whole Python functions on one line, newlines replaced by double spaces | Code inside a JSON string; 3 of 4 models did this |
+| `constraints[].name` missing on every entry | A nested list of objects is the shape models drop fields from |
+| `{"args": [[42], 0]}` counted as zero cases | The generator was fine; **our** decoder demanded a mapping |
+| `signatures` absent, fields flat at top level, `difficulty: "Medium"` | `strict: False` makes the schema a hint, and models write the obvious shape |
+
+None of those is a model failing to author a coding question.
+
+### Measured, on deepseek-chat
+
+| strategy | accepted | median time | dominant failure |
+|---|---|---|---|
+| monolithic (one JSON call) | 0 / 3 | 400s | `prose_too_thin` |
+| flat (one JSON call, no nested lists) | 0 / 3 | 24s | flattened code |
+| delimited (`=== MARKERS ===`, no JSON for code) | **1 / 5** | ~110s | generator case count |
+
+The accepted question scored 1.0 on every prose metric and was flagged neither
+thin nor recalled. The same model could not previously produce a *parseable*
+solution through the JSON path.
+
+### Four assumptions that were wrong
+
+- **Gate latency mattered.** It does not: 858.3 of 858.7 seconds was provider
+  time. The 14-18 sandboxed processes are 0.05% of a question. We were about to
+  optimise them.
+- **Output volume drove latency.** It does not: the staged run produced *one*
+  language instead of three, was slower, and used roughly ten times the tokens.
+- **The schema was merely verbose.** It was a failure amplifier: 13 validation
+  retries against zero for four narrow schemas.
+- **Recall was a model quirk.** It is prompt-induced. Four topic-only prompts
+  across three models returned the same memorised problem, one emitting a URL
+  slug as its title. A single local scenario seed -- no model call -- produced
+  the only original question of the session.
+
+### Process notes worth keeping
+
+- **A retry must not relax the ask.** The client dropped to unconstrained JSON
+  after the first failure, which turned a transient miss into a structural one.
+- **Validate inside the stage.** `prose_too_thin` was the most common rejection,
+  and by the time the gate says so the reference, generator and brute force have
+  all been written for a question that was never going to be served.
+- **Look at the payload.** Four hypotheses died to one capture of what a
+  rejected generation actually contained. Reading source produced the wrong
+  answer four times; reading one response produced the right one.

@@ -110,6 +110,8 @@ class StageOutcome:
 class StagedResult:
     question: GeneratedQuestion | None = None
     scenario: str = ""
+    #: The module source, when the strategy produced one.
+    source: str = ""
     stages: list[StageOutcome] = field(default_factory=list)
 
     @property
