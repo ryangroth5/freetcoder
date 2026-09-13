@@ -29,7 +29,7 @@ from .gate import validate_question
 from .pipeline import generate_question
 from .quality import Scorecard, score_question
 from .scenarios import pick as pick_scenario
-from .staged import generate_flat, generate_staged
+from .staged import generate_delimited, generate_flat, generate_staged
 
 PROMPTS = Path(__file__).parent / "prompts"
 
@@ -104,8 +104,12 @@ async def run_variant(
         started = time.monotonic()
         card.attempted += 1
         with telemetry.collecting() as calls:
-            if strategy in {"staged", "flat"}:
-                build = generate_staged if strategy == "staged" else generate_flat
+            if strategy in {"staged", "flat", "delimited"}:
+                build = {
+                    "staged": generate_staged,
+                    "flat": generate_flat,
+                    "delimited": generate_delimited,
+                }[strategy]
                 staged = await build(
                     client, config, difficulty=Difficulty.MEDIUM,
                     language=Language.PYTHON, tries_per_stage=max(1, attempts),
@@ -120,8 +124,13 @@ async def run_variant(
                     if question is not None
                     else GateOutcome.SCHEMA_INVALID
                 )
+                # Carry the stage's own complaint, not just its name. Without
+                # it every failure reads "question" and needs a separate run to
+                # find out what was actually wrong.
+                bad = next((st for st in staged.stages if not st.ok), None)
                 failures = (
-                    [staged.failed_stage or outcome.value]
+                    [f"{staged.failed_stage or outcome.value}"
+                     + (f": {bad.error[:110]}" if bad and bad.error else "")]
                     if question is None or outcome is not GateOutcome.ACCEPTED
                     else []
                 )
@@ -197,7 +206,7 @@ async def main() -> int:
     parser.add_argument("--sufficiency", action="store_true",
                         help="also run the second-model check (doubles the time)")
     parser.add_argument("--strategies", default="monolithic",
-                        help="comma-separated: monolithic,flat,staged")
+                        help="comma-separated: monolithic,flat,delimited,staged")
     parser.add_argument("--models", default="",
                         help="comma-separated model slugs; blank uses the configured one")
     parser.add_argument("--seed-scenario", action="store_true",

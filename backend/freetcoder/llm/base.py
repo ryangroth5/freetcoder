@@ -23,6 +23,17 @@ class LLMClient(Protocol):
         """Return an instance of `schema`, or raise LLMError."""
         ...
 
+    async def complete_text(
+        self, *, system: str, user: str, temperature: float = ...
+    ) -> str:
+        """Return the raw reply.
+
+        For content that does not survive JSON: source code has to have its
+        newlines escaped inside a JSON string, and most models measured here
+        simply do not, returning a whole function on one line.
+        """
+        ...
+
     async def complete_json_with_tools(
         self,
         *,

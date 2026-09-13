@@ -113,6 +113,41 @@ class OpenAICompatibleClient:
             f"no valid response after {max(1, self._max_retries)} attempt(s): {last}"
         ) from last
 
+    async def complete_text(
+        self, *, system: str, user: str, temperature: float = 0.7
+    ) -> str:
+        """A plain reply, with no response_format at all."""
+        last: Exception | None = None
+        for _ in range(max(1, self._max_retries)):
+            try:
+                with telemetry.record(self._model, "text") as entry:
+                    resp = await self._client.chat.completions.create(
+                        model=self._model,
+                        temperature=temperature,
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                    )
+                    usage = getattr(resp, "usage", None)
+                    if usage is not None:
+                        entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                        entry.completion_tokens = (
+                            getattr(usage, "completion_tokens", 0) or 0
+                        )
+                choices = getattr(resp, "choices", None)
+                if not choices:
+                    detail = getattr(resp, "error", None) or "no choices in response"
+                    raise LLMError(f"provider returned no completion: {detail}")
+                content = choices[0].message.content
+                if not content or not content.strip():
+                    raise LLMError("empty response from provider")
+                return str(content)
+            except (APIError, LLMError) as exc:
+                last = exc
+                log.warning("text request failed: %s", exc)
+        raise LLMError(f"no text response: {last}") from last
+
     async def complete_json_with_tools(
         self,
         *,

@@ -106,6 +106,19 @@ class FakeLLM:
         except ValidationError as exc:
             raise LLMError(f"fixture does not satisfy {schema.__name__}: {exc}") from exc
 
+    async def complete_text(
+        self, *, system: str, user: str, temperature: float = 0.7
+    ) -> str:
+        self.calls.append((system, user))
+        if not self._queue and self._cycle and self._original:
+            self._queue = list(self._original)
+        if not self._queue:
+            raise LLMError("FakeLLM queue is empty")
+        item = self._queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return str(item)
+
     async def complete_json_with_tools(
         self,
         *,

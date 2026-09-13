@@ -452,6 +452,14 @@ class TestFlattenedCodeIsNamed:
         assert "single line" in fault
         assert "indentation is syntax" in fault
 
+    def test_a_flattened_body_without_keywords_is_still_detected(self) -> None:
+        """A first version guessed from keywords and waved glm-4.6 straight
+        through -- zero newlines, and not flagged. The parser does not guess."""
+        from freetcoder.generate.staged import flattened_code_fault
+
+        flat = "def solve(a, b):  total = a + b  scaled = total * 2  scaled"
+        assert flattened_code_fault(flat, Language.PYTHON) != ""
+
     def test_real_code_is_not_flagged(self) -> None:
         from freetcoder.generate.staged import flattened_code_fault
 

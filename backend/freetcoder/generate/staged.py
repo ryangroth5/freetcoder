@@ -19,6 +19,7 @@ models returned the same one -- and a concrete setting costs nothing to supply.
 
 from __future__ import annotations
 
+import json
 import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -36,9 +37,23 @@ from ..models import (
     TestCase,
 )
 from ..progress import NULL_REPORTER, Reporter
+from ..runner import run_python
 from ..runner.adapters import check_syntax
 from ..runner.types import Verdict
-from .gate import REFERENCE_LIMITS, _failure_detail, _run_cases
+from .delimited import (
+    DelimitedDraft,
+    ParseError,
+    parse_bounds,
+    parse_question,
+    parse_sections,
+    parse_tests,
+)
+from .gate import (
+    GENERATOR_LIMITS,
+    REFERENCE_LIMITS,
+    _failure_detail,
+    _run_cases,
+)
 from .harness import values_equal
 from .pipeline import _read_prompt
 from .scenarios import SCENARIOS, pick
@@ -195,34 +210,33 @@ def constraints_fault(
     return ""
 
 
-#: Statements that only make sense on their own line. If several appear with no
-#: newline between them, the code arrived flattened.
-_BLOCK_HINTS = ("  return ", "  for ", "  while ", "  if ", "  res ", "  count")
-
-
 def flattened_code_fault(source: str, language: Language) -> str:
     """Did the newlines survive the JSON round trip?
 
-    Observed from deepseek-chat: an entire reference solution arrives on one
-    line, with line breaks replaced by double spaces --
+    Measured across four models asked for the same Python solution:
+    deepseek-chat, glm-4.6 and kimi-k2.5 all returned the body with no line
+    breaks, joined by double spaces --
 
         def max_fruits(tree):  # sliding window  left = 0  res = 0  for ...
 
-    For Python that is fatal, because indentation is syntax, and it is not
-    safely repairable: the original block structure is gone. It fails at import
-    with a SyntaxError that says nothing about the real cause, so name it.
+    Only deepseek-v4.1-flash emitted real newlines. For Python this is fatal,
+    because indentation is syntax, and it is not repairable: the block
+    structure is gone.
+
+    The test is the real parser, not a pattern. A first version guessed from
+    keywords and waved glm-4.6 straight through -- zero newlines, not flagged.
+    Parsing is exact, and it keeps `def f(x): return x`, which is legal, from
+    being rejected.
     """
     if "\n" in source.strip():
         return ""
-    if language is Language.PYTHON and source.count(":") and any(
-        hint in source for hint in _BLOCK_HINTS
-    ):
-        return (
-            "the code arrived on a single line with no line breaks -- Python "
-            "indentation is syntax, so it cannot run. Emit real newlines inside "
-            "the JSON string (escaped as \\n), one statement per line, indented."
-        )
-    return ""
+    if check_syntax(language, source).verdict is Verdict.OK:
+        return ""   # a genuine one-liner
+    return (
+        "the code arrived on a single line with no line breaks and does not "
+        "parse -- indentation is syntax. Emit real newlines inside the JSON "
+        "string, one statement per line, indented."
+    )
 
 
 def reference_fault(
@@ -522,5 +536,301 @@ async def generate_flat(
         visible_tests=draft.visible_tests,
         hidden_generator_py=draft.hidden_generator_py,
         brute_force_py=draft.brute_force_py,
+    )
+    return result
+
+
+async def _delimited_question(
+    client: LLMClient,
+    *,
+    system: str,
+    user: str,
+    language: Language,
+    tries: int,
+    outcome: StageOutcome,
+) -> DelimitedDraft | None:
+    """Ask for the question as text, parse it, and check it here."""
+    ask = user
+    last = ""
+    for _ in range(tries):
+        outcome.attempts += 1
+        try:
+            with telemetry.stage("question"):
+                reply = await client.complete_text(
+                    system=system, user=ask, temperature=0.8
+                )
+            candidate = parse_question(reply)
+        except (LLMError, ParseError) as exc:
+            last = str(exc)[:200]
+            ask = f"{user}\n\nYour previous answer could not be read: {last}"
+            continue
+
+        fault = prose_fault(
+            candidate.statement_md, list(candidate.parameter_names)
+        ) or reference_fault(
+            scaffold=candidate.scaffold,
+            reference_solution=candidate.reference_solution,
+            function_name=candidate.function_name,
+            visible_tests=list(candidate.visible_tests),
+            language=language,
+        )
+        if not fault:
+            return candidate
+        last = fault
+        ask = (
+            f"{user}\n\nYour previous answer was rejected: {fault}\n"
+            "Fix exactly that and send the whole thing again."
+        )
+    outcome.error = last or "no usable response"
+    return None
+
+
+async def _delimited_bounds(
+    client: LLMClient,
+    *,
+    user: str,
+    parameters: list[str],
+    tries: int,
+    outcome: StageOutcome,
+) -> tuple[str, list[ParamConstraint]] | None:
+    """Bounds as flat `key: value` lines rather than a nested JSON list.
+
+    This was the last call still asking for JSON, and the last one failing:
+    three delimited runs got the whole question through and then lost the
+    `name` on every bound. Flat lines have nowhere to drop a field.
+    """
+    ask = user
+    last = ""
+    for _ in range(tries):
+        outcome.attempts += 1
+        try:
+            with telemetry.stage("constraints"):
+                reply = await client.complete_text(
+                    system=_read_prompt("stage_bounds"), user=ask, temperature=0.2
+                )
+            parsed = parse_sections(reply)
+            prose = parsed.text("bounds")
+            bounds = [
+                ParamConstraint.model_validate(b)
+                for b in parse_bounds(parsed.sections.get("bound", ""))
+            ]
+        except (LLMError, ParseError, ValueError) as exc:
+            last = str(exc)[:200]
+            ask = f"{user}\n\nYour previous answer could not be read: {last}"
+            continue
+
+        missing = [p for p in parameters if p not in {b.name for b in bounds}]
+        if not missing:
+            return prose, bounds
+        last = (
+            "no bound given for " + ", ".join(repr(p) for p in missing)
+            + "; every parameter needs its own `=== BOUND ===` block"
+        )
+        ask = f"{user}\n\nYour previous answer was rejected: {last}"
+    outcome.error = last or "no bounds produced"
+    return None
+
+
+async def _delimited_tests(
+    client: LLMClient,
+    *,
+    user: str,
+    bounds: list[ParamConstraint],
+    wanted: int,
+    tries: int,
+    outcome: StageOutcome,
+) -> tuple[str, str | None] | None:
+    """The generator, written after the bounds and checked against them.
+
+    Asked for alongside the statement, the generator was written before any
+    bounds existed and emitted cases outside them -- `constraint_violation`
+    twice in four, on input the question promised could not occur. Running it
+    here turns that into one retry instead of a discarded question.
+    """
+    ask = user
+    last = ""
+    for _ in range(tries):
+        outcome.attempts += 1
+        try:
+            with telemetry.stage("tests"):
+                reply = await client.complete_text(
+                    system=_read_prompt("stage_tests"), user=ask, temperature=0.3
+                )
+            generator, brute = parse_tests(reply)
+        except (LLMError, ParseError) as exc:
+            last = str(exc)[:200]
+            ask = f"{user}\n\nYour previous answer could not be read: {last}"
+            continue
+
+        fault = flattened_code_fault(generator, Language.PYTHON)
+        if not fault:
+            run = run_python(generator, limits=GENERATOR_LIMITS)
+            cases = _decode_generated(run.stdout)
+            if run.verdict is not Verdict.OK:
+                fault = f"the generator did not run: {run.stderr.strip()[:200]}"
+            elif len(cases) < wanted:
+                fault = (
+                    f"the generator printed {len(cases)} case(s); at least "
+                    f"{wanted} are needed, one JSON object per line"
+                )
+            else:
+                fault = _cases_within(cases, bounds)
+
+        if not fault:
+            return generator, brute
+        last = fault
+        ask = f"{user}\n\nYour previous answer was rejected: {fault}"
+    outcome.error = last or "no usable response"
+    return None
+
+
+def _decode_generated(stdout: str) -> list[dict[str, object]]:
+    cases: list[dict[str, object]] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("args"), dict):
+            cases.append(row["args"])
+    return cases
+
+
+def _cases_within(
+    cases: list[dict[str, object]], bounds: list[ParamConstraint]
+) -> str:
+    """The gate's own constraint check, run where a retry is cheap."""
+    by_name = {b.name: b for b in bounds}
+    for args in cases:
+        for name, value in args.items():
+            bound = by_name.get(name)
+            if bound is None:
+                continue
+            if isinstance(value, list | str):
+                size = len(value)
+                if bound.min_length is not None and size < bound.min_length:
+                    return f"{name!r} of size {size} is below the stated minimum"
+                if bound.max_length is not None and size > bound.max_length:
+                    return f"{name!r} of size {size} exceeds the stated maximum"
+                if isinstance(value, list):
+                    for item in value:
+                        if not isinstance(item, int | float):
+                            continue
+                        if (bound.element_min is not None
+                                and item < bound.element_min):
+                            return f"{name!r} contains {item}, below its bound"
+                        if (bound.element_max is not None
+                                and item > bound.element_max):
+                            return f"{name!r} contains {item}, above its bound"
+            elif isinstance(value, int | float):
+                if bound.min is not None and value < bound.min:
+                    return f"{name!r} is {value}, below the stated minimum"
+                if bound.max is not None and value > bound.max:
+                    return f"{name!r} is {value}, above the stated maximum"
+    return ""
+
+
+async def generate_delimited(
+    client: LLMClient,
+    config: FormatConfig,
+    *,
+    difficulty: Difficulty | None = None,
+    language: Language = Language.PYTHON,
+    tries_per_stage: int = 2,
+    scenario: str | None = None,
+    rng: random.Random | None = None,
+    report_to: Reporter = NULL_REPORTER,
+) -> StagedResult:
+    """Two calls, neither of them JSON.
+
+    Source code does not survive a JSON string: three of four models measured
+    returned whole functions on one line. This asks for the same content
+    between `=== MARKERS ===`, so code is written exactly as it would be in a
+    file and nothing needs escaping.
+    """
+    difficulty = difficulty or config.session.difficulty_for(0)
+    chosen = scenario or pick(rng)
+    result = StagedResult(scenario=chosen)
+
+    question_outcome = StageOutcome(name="question")
+    result.stages.append(question_outcome)
+    report_to("writing the question")
+    draft = await _delimited_question(
+        client,
+        system=_read_prompt("stage_delimited"),
+        user=(
+            f"{_read_prompt(config.generation.style)}\n\n"
+            f"{_brief(config, difficulty, chosen)}\n\n"
+            f"Target language: {language.value}.\n"
+            f"Show {config.environment.visible_tests} worked example(s).\n"
+            f"Produce at least {config.scoring.hidden_test_count} hidden cases."
+        ),
+        language=language,
+        tries=tries_per_stage,
+        outcome=question_outcome,
+    )
+    if draft is None:
+        return result
+
+    parameters = sorted({k for t in draft.visible_tests for k in t.args})
+    bounds_outcome = StageOutcome(name="constraints")
+    result.stages.append(bounds_outcome)
+    report_to("deriving the constraints")
+    got = await _delimited_bounds(
+        client,
+        user=(
+            f"# {draft.title}\n\n{draft.statement_md}\n\n"
+            f"Reference solution:\n\n```\n{draft.reference_solution}\n```\n\n"
+            f"Parameters: {', '.join(parameters)}"
+        ),
+        parameters=parameters,
+        tries=tries_per_stage,
+        outcome=bounds_outcome,
+    )
+    if got is None:
+        return result
+    constraints_md, bounds = got
+
+    tests_outcome = StageOutcome(name="tests")
+    result.stages.append(tests_outcome)
+    report_to("building the hidden tests")
+    machinery = await _delimited_tests(
+        client,
+        user=(
+            f"# {draft.title}\n\n{draft.statement_md}\n\n"
+            f"Reference solution:\n\n```\n{draft.reference_solution}\n```\n\n"
+            f"Bounds every case must obey:\n{constraints_md}\n\n"
+            f"Produce at least {config.scoring.hidden_test_count} cases."
+        ),
+        bounds=bounds,
+        wanted=config.scoring.hidden_test_count,
+        tries=tries_per_stage,
+        outcome=tests_outcome,
+    )
+    if machinery is None:
+        return result
+    hidden_generator_py, brute_force_py = machinery
+
+    result.question = GeneratedQuestion(
+        title=draft.title,
+        difficulty=difficulty,
+        topics=list(config.generation.topics),
+        statement_md=draft.statement_md,
+        constraints_md=constraints_md,
+        constraints=bounds,
+        signatures=[
+            Signature(
+                language=language,
+                function_name=draft.function_name,
+                scaffold=draft.scaffold,
+                reference_solution=draft.reference_solution,
+            )
+        ],
+        visible_tests=draft.visible_tests,
+        hidden_generator_py=hidden_generator_py,
+        brute_force_py=brute_force_py,
     )
     return result
