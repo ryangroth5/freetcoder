@@ -258,3 +258,24 @@ class TestTheGateAcceptsWhatWeBuild:
         retry = llm.calls[1][1]
         assert "rejected" in retry
         assert "undefined_total" in retry, "the model must be told what ruff said"
+
+
+class TestALargePayloadSurvives:
+    """The probe's record carries the statement and every generated case.
+
+    At the sandbox's default 64KB output cap it was truncated mid-JSON and read
+    as "the module produced no result" -- a true statement about a payload that
+    was in fact complete and valid.
+    """
+
+    def test_forty_large_cases_still_come_back(self) -> None:
+        bulky = GOOD.replace(
+            "    for _ in range(14):\n"
+            "        n = rng.randint(1, 20)",
+            "    for _ in range(40):\n"
+            "        n = rng.randint(200, 400)",
+        )
+        probed = probe_module(bulky, wanted=12)
+        assert probed.ok, f"{probed.step}: {probed.detail}"
+        assert probed.payload is not None
+        assert len(probed.payload["cases"]) == 40  # type: ignore[arg-type]

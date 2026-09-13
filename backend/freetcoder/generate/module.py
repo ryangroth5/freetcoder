@@ -45,7 +45,13 @@ INTERFACE = Path(__file__).parent / "interface" / "question_interface.py"
 TOOL_LIMITS = Limits(
     wall_seconds=60.0, cpu_seconds=55, memory_mb=1024, limit_address_space=False
 )
-PROBE_LIMITS = Limits(wall_seconds=30.0, cpu_seconds=25, memory_mb=512)
+#: The probe's output is ours, not a candidate's, and it carries the statement
+#: plus every generated case. The default 64KB cap truncated it mid-JSON, which
+#: read as "the module produced no result" -- a true statement about a payload
+#: that was in fact complete.
+PROBE_LIMITS = Limits(
+    wall_seconds=30.0, cpu_seconds=25, memory_mb=512, max_output_bytes=4_000_000
+)
 
 #: Obvious destructiveness. The container is disposable and the sandbox drops
 #: privileges, blocks the network and caps everything, so this is a smoke alarm
@@ -165,10 +171,14 @@ def probe_module(source: str, *, wanted: int) -> ProbeResult:
                 detail=str(record.get("detail", "")),
             )
 
-    return ProbeResult(
-        ok=False, step="probe",
-        detail=(result.stderr or "the module produced no result").strip()[:600],
+    # Say what it *did* produce. "no result" alone gives nothing to act on,
+    # and the interesting case is a module that printed something instead.
+    noise = (result.stdout or "").strip()
+    detail = (result.stderr or "").strip() or (
+        f"the module printed {noise[:200]!r} instead of a result"
+        if noise else "the module produced no output at all"
     )
+    return ProbeResult(ok=False, step="probe", detail=detail[:600])
 
 
 def module_fault(source: str, *, wanted: int) -> tuple[str, dict[str, object] | None]:
