@@ -571,3 +571,67 @@ solution through the JSON path.
 - **Look at the payload.** Four hypotheses died to one capture of what a
   rejected generation actually contained. Reading source produced the wrong
   answer four times; reading one response produced the right one.
+
+---
+
+## Questions as modules
+
+The conclusion of the experiments above was that we were fighting the wire
+format, not the model. So the model is now handed
+`generate/interface/question_interface.py` -- a real file, not prose about one
+-- and writes a module implementing it.
+
+Measured on glm-4.6, seeded, three tries:
+
+```
+27.6s   tok= 2280   Balanced Trees
+37.8s   tok= 3050   Tidal Stability Window
+204.6s  tok= 7711   Busiest Departure Window
+42.4s   tok= 2344   Longest Orchard Segment
+60.8s   tok= 2355   Longest Baking Shift
+584.5s  tok=23849   Rotated Bookshelf Search
+```
+
+Against 0 of 3 for the JSON monolith on the same gate, and 1 of 5 for
+delimited text. None was flagged thin or recalled, and the scenario seed is
+visible in every title.
+
+### Why it works
+
+Validation stopped being parsing and became running:
+
+1. `ruff check --isolated --select E9,F` -- real errors only. Style is not a
+   reason to reject a question, and `--isolated` keeps a throwaway workspace
+   from inheriting the project's rules.
+2. `pyright --outputjson` -- it is Node, so it needs `limit_address_space=False`
+   like every other V8 process here.
+3. Import it in the sandbox and check the interface is present.
+4. Run it: `solution` over `EXAMPLES`, `generate_cases`, `is_valid` over every
+   case, `brute_force` for agreement.
+
+Each step hands back its own output as the retry message, which is the loop
+these models are already tuned for.
+
+### What the shape removes
+
+- **Expected values are never stated.** They come from calling `solution`, so
+  "you claimed [0, 3] but your reference returns [1, 3]" cannot happen.
+- **The scaffold, function name and parameter names come from
+  `inspect.signature`.** They cannot disagree with the solution they describe.
+- **`is_valid` replaces the constraints list of objects** -- the shape models
+  kept mangling -- with a predicate we call. A body ignoring its arguments is
+  refused, since `return True` would pass everything vacuously. The check parses
+  the body: splitting on the first colon lands inside a type hint.
+- **Module-level names, not a class**, so the same shape translates to exported
+  functions in TypeScript and package functions in Go.
+
+### Two bugs it surfaced in us
+
+- `PROBE_LIMITS` inherited the sandbox's 64KB output cap, so a question with
+  forty sizeable cases was truncated mid-JSON and reported as "the module
+  produced no result" -- true about what arrived, wrong about what was
+  produced. The cap protects against untrusted candidate output; this is our
+  own probe.
+- Rate limiting (HTTP 429 from an upstream shared pool) is now legible rather
+  than arriving as a generic failure, because the client reports the provider's
+  own error text.
