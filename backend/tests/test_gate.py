@@ -507,3 +507,44 @@ class TestTheReferenceIsAsFastAsItClaims:
         for _ in range(3):
             report = validate_question(self._question(self.LINEAR))
             assert report.outcome is not GateOutcome.REFERENCE_TOO_SLOW, report.detail
+
+
+class TestPositionalGeneratorArgs:
+    """Models write `{"args": [[42], 0]}` as readily as a named mapping.
+
+    Both forms came from the same model on consecutive calls. Skipping the
+    positional one silently discarded generators that ran perfectly and printed
+    exactly the number of cases asked for, then reported "no hidden cases" --
+    which points at the generator rather than at our decoder.
+    """
+
+    def test_named_args_are_taken(self) -> None:
+        from freetcoder.generate.gate import decode_generated_args
+
+        payload = {"args": {"nums": [1, 2], "target": 3}}
+        assert decode_generated_args(payload, ["nums", "target"]) == {
+            "nums": [1, 2], "target": 3,
+        }
+
+    def test_positional_args_are_mapped_in_signature_order(self) -> None:
+        from freetcoder.generate.gate import decode_generated_args
+
+        assert decode_generated_args({"args": [[1, 2], 3]}, ["nums", "target"]) == {
+            "nums": [1, 2], "target": 3,
+        }
+
+    def test_a_wrong_arity_is_refused_rather_than_guessed(self) -> None:
+        """Mapping two values onto three names would invent data."""
+        from freetcoder.generate.gate import decode_generated_args
+
+        assert decode_generated_args({"args": [1, 2]}, ["a", "b", "c"]) is None
+
+    def test_a_generator_using_positional_args_now_works(self) -> None:
+        q = load("two_sum_good")
+        q.hidden_generator_py = (
+            "import json\n"
+            "for i in range(12):\n"
+            "    print(json.dumps({'args': [[1, 2, i + 3], 3]}))\n"
+        )
+        report = validate_question(q)
+        assert report.outcome is not GateOutcome.NO_HIDDEN_CASES

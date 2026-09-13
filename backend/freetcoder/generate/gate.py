@@ -132,6 +132,38 @@ def _check_reference_on_visible(
     return None
 
 
+def decode_generated_args(
+    payload: object, parameters: list[str]
+) -> dict[str, object] | None:
+    """One generated case's arguments, keyed by parameter name.
+
+    Models write `{"args": [[42], 0]}` as readily as
+    `{"args": {"levels": [42], "drift": 0}}` -- positional, in signature order.
+    Both were produced by the same model on consecutive calls. Skipping the
+    positional form silently discarded generators that ran perfectly and
+    printed exactly the number of cases asked for, and reported it as
+    "no hidden cases", which points at the wrong thing entirely.
+    """
+    if not isinstance(payload, dict):
+        return None
+    args = payload.get("args")
+    if isinstance(args, dict):
+        return args
+    if isinstance(args, list) and len(args) == len(parameters) and parameters:
+        return dict(zip(parameters, args, strict=True))
+    return None
+
+
+def parameter_order(q: GeneratedQuestion) -> list[str]:
+    """Parameter names in the order the visible examples give them."""
+    names: list[str] = []
+    for case in q.visible_tests:
+        for name in case.args:
+            if name not in names:
+                names.append(name)
+    return names
+
+
 def _materialise_hidden_cases(q: GeneratedQuestion) -> tuple[list[TestCase], GateReport | None]:
     """Run the model's generator to get hidden inputs (inputs only)."""
     result = run_python(q.hidden_generator_py, limits=GENERATOR_LIMITS)
@@ -145,6 +177,7 @@ def _materialise_hidden_cases(q: GeneratedQuestion) -> tuple[list[TestCase], Gat
         )
 
     cases: list[TestCase] = []
+    parameters = parameter_order(q)
     for line in result.stdout.splitlines():
         line = line.strip()
         if not line:
@@ -153,8 +186,8 @@ def _materialise_hidden_cases(q: GeneratedQuestion) -> tuple[list[TestCase], Gat
             payload = json.loads(line)
         except json.JSONDecodeError:
             continue
-        args = payload.get("args")
-        if isinstance(args, dict):
+        args = decode_generated_args(payload, parameters)
+        if args is not None:
             cases.append(TestCase(args=args, expected=None))
         if len(cases) >= MAX_HIDDEN_CASES:
             break

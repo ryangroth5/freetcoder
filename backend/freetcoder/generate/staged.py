@@ -53,6 +53,7 @@ from .gate import (
     REFERENCE_LIMITS,
     _failure_detail,
     _run_cases,
+    decode_generated_args,
 )
 from .harness import values_equal
 from .pipeline import _read_prompt
@@ -665,7 +666,7 @@ async def _delimited_tests(
         fault = flattened_code_fault(generator, Language.PYTHON)
         if not fault:
             run = run_python(generator, limits=GENERATOR_LIMITS)
-            cases = _decode_generated(run.stdout)
+            cases = _decode_generated(run.stdout, [b.name for b in bounds])
             if run.verdict is not Verdict.OK:
                 fault = f"the generator did not run: {run.stderr.strip()[:200]}"
             elif len(cases) < wanted:
@@ -684,7 +685,10 @@ async def _delimited_tests(
     return None
 
 
-def _decode_generated(stdout: str) -> list[dict[str, object]]:
+def _decode_generated(
+    stdout: str, parameters: list[str]
+) -> list[dict[str, object]]:
+    """Shares the gate's decoder, including its tolerance of positional args."""
     cases: list[dict[str, object]] = []
     for line in stdout.splitlines():
         line = line.strip()
@@ -694,8 +698,9 @@ def _decode_generated(stdout: str) -> list[dict[str, object]]:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(row, dict) and isinstance(row.get("args"), dict):
-            cases.append(row["args"])
+        args = decode_generated_args(row, parameters)
+        if args is not None:
+            cases.append(args)
     return cases
 
 
