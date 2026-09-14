@@ -125,13 +125,14 @@ async def run_variant(
                 # Gate against every language the format offers, which is what
                 # the product serves. Gating Python alone would score a
                 # question the candidate cannot actually attempt.
-                outcome = (
+                gate = (
                     validate_question(
                         question, languages=config.environment.languages
-                    ).outcome
+                    )
                     if question is not None
-                    else GateOutcome.SCHEMA_INVALID
+                    else None
                 )
+                outcome = gate.outcome if gate else GateOutcome.SCHEMA_INVALID
                 translated = [
                     st for st in staged.stages if st.name.startswith("translate:")
                 ]
@@ -139,9 +140,17 @@ async def run_variant(
                 # it every failure reads "question" and needs a separate run to
                 # find out what was actually wrong.
                 bad = next((st for st in staged.stages if not st.ok), None)
+                # The gate's own detail, too. Printing "generator_failed" and
+                # nothing else sends you guessing at which of five things went
+                # wrong -- the same blindness the stage errors were added to
+                # fix, left in place one layer up.
+                why = (
+                    (bad.error[:110] if bad and bad.error else "")
+                    or (gate.detail[:160] if gate else "")
+                )
                 failures = (
                     [f"{staged.failed_stage or outcome.value}"
-                     + (f": {bad.error[:110]}" if bad and bad.error else "")]
+                     + (f": {why}" if why else "")]
                     if question is None or outcome is not GateOutcome.ACCEPTED
                     else []
                 )

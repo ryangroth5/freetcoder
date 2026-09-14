@@ -39,7 +39,14 @@ log = logging.getLogger(__name__)
 #: The reference solution is trusted code we generated the prompt for, so it
 #: gets more headroom than a submission and keeps its network block.
 REFERENCE_LIMITS = Limits(wall_seconds=15.0, cpu_seconds=12, memory_mb=512)
-GENERATOR_LIMITS = Limits(wall_seconds=15.0, cpu_seconds=12, memory_mb=512)
+#: The generator's output is a list of test inputs we asked for, and a
+#: perf-discriminating question wants large ones: forty cases of a thousand
+#: elements is 200KB, and the default 64KB cap silently truncated it mid-line,
+#: yielding fourteen cases instead of forty with no error anywhere. The cap
+#: exists to bound untrusted *candidate* output; this is output we requested.
+GENERATOR_LIMITS = Limits(
+    wall_seconds=15.0, cpu_seconds=12, memory_mb=512, max_output_bytes=8_000_000
+)
 #: Brute force is *expected* to blow through this on large inputs.
 BRUTE_FORCE_LIMITS = Limits(wall_seconds=4.0, cpu_seconds=3, memory_mb=256)
 

@@ -644,3 +644,24 @@ class TestFencesAreToleratedInEveryLanguage:
         assert result.question is not None, result.failed_stage
         ts = result.question.signature_for(Language.TYPESCRIPT)
         assert ts is not None and "```" not in ts.reference_solution
+
+
+class TestTheHiddenCasesAreNotSilentlyTruncated:
+    """Forty cases of a thousand elements is 200KB of generator output.
+
+    At the default 64KB cap it was cut mid-line and yielded fourteen cases
+    with no error: the question was served, graded on a third of the hidden
+    tests it promised, and nothing reported it. Truncation that fails loudly
+    is a bug; truncation that succeeds quietly is worse.
+    """
+
+    def test_a_large_case_set_survives_the_generator(self) -> None:
+        from freetcoder.generate.gate import GENERATOR_LIMITS
+        from freetcoder.generate.module import _replay_generator
+        from freetcoder.runner import run_python
+
+        cases = [{"nums": list(range(1000)), "k": i} for i in range(40)]
+        result = run_python(_replay_generator(cases), limits=GENERATOR_LIMITS)
+        assert result.verdict.value == "ok", result.stderr[:200]
+        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        assert len(lines) == 40, f"only {len(lines)} of 40 cases survived"
