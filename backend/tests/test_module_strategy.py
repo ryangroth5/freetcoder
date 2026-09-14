@@ -769,3 +769,75 @@ class TestTheStatementIsCheckedOnThisPathToo:
         ))
         assert result.question is not None
         assert len(llm.calls) == 1
+
+
+class TestARejectedModuleIsRevisedNotRewritten:
+    """Measured, a module costs between one and twenty minutes of provider
+    time, almost all of it waiting. Throwing that away because one validator
+    complained is the expensive way to fix a cheap problem."""
+
+    def _run(self, replies, **kw):
+        import asyncio
+
+        from freetcoder.generate.module import generate_question_as_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        llm = FakeLLM(list(replies))
+        result = asyncio.run(generate_question_as_module(
+            llm, python_only(), difficulty=Difficulty.MEDIUM,
+            check_sufficiency=False, **kw,
+        ))
+        return llm, result
+
+    def test_the_gates_complaint_goes_back_with_the_module(self) -> None:
+        """A module claiming O(n) for an O(n^2) solution is rejected as
+        `perf_not_discriminating` every time, so this pins the revision path
+        rather than hoping the gate happens to object."""
+        import asyncio
+
+        from freetcoder.generate.module import generate_question_as_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        lying = GOOD.replace(
+            "EXAMPLES = [", 'COMPLEXITY = "O(n)"\n\nEXAMPLES = [', 1
+        )
+        assert lying != GOOD, "the fixture did not change"
+        cfg = python_only()
+        cfg.scoring.perf_tests = True
+
+        llm = FakeLLM([lying, lying])
+        result = asyncio.run(generate_question_as_module(
+            llm, cfg, difficulty=Difficulty.MEDIUM, max_attempts=1,
+            check_sufficiency=False, repair_rounds=1,
+        ))
+        assert result.question is None, "a question claiming a bound it misses was served"
+        assert len(llm.calls) == 2, "the rejection must be answered by a revision"
+        second = llm.calls[1][1]
+        assert "def solution" in second, "the module itself must go back"
+        assert "not actually enforced" in second, "the gate's own words must go back"
+
+    def test_it_starts_over_once_the_rounds_are_spent(self) -> None:
+        """Revision is not unbounded: a model that cannot fix its own module
+        must not spend the whole budget failing the same way."""
+        llm, result = self._run([GOOD], max_attempts=1, repair_rounds=0)
+        assert result.question is not None, [a.detail for a in result.attempts]
+        assert len(llm.calls) == 1
+
+    def test_a_revision_prompt_carries_the_previous_module(self) -> None:
+        import asyncio
+
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        llm = FakeLLM([GOOD])
+        asyncio.run(generate_module(
+            llm, python_only(), difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+            revise_from=("# the old module\nTITLE = 'x'\n", "the gate said no"),
+        ))
+        asked = llm.calls[0][1]
+        assert "# the old module" in asked
+        assert "the gate said no" in asked
+        assert "Fix exactly that" in asked

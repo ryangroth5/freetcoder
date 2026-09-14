@@ -40,7 +40,7 @@ const SERVER_FIELDS: {
     min: 1, max: 10, hint: 'Regenerations before giving up on a question' },
   { name: 'repair_rounds', label: 'Repair rounds', kind: 'number',
     min: 0, max: 10,
-    hint: 'Patch-and-re-gate rounds before regenerating. JSON payload strategy only.' },
+    hint: 'Rounds spent fixing a rejected question before writing a new one' },
   { name: 'tool_call_budget', label: 'Repair tool budget', kind: 'number',
     min: 0, max: 32, hint: 'JSON payload strategy only' },
   { name: 'tutor_tool_budget', label: 'Tutor tool budget', kind: 'number',

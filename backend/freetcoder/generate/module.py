@@ -255,9 +255,16 @@ async def generate_module(
     question_number: int = 1,
     scenario: str | None = None,
     rng: random.Random | None = None,
+    revise_from: tuple[str, str] | None = None,
     report_to: Reporter = NULL_REPORTER,
 ) -> StagedResult:
-    """One call, then a critique loop until the module passes or the tries run out."""
+    """One call, then a critique loop until the module passes or the tries run out.
+
+    `revise_from` is `(previous module, what was wrong with it)`. Given it, the
+    first call is a revision rather than a fresh start -- which is the whole
+    point of having the question be a file: a module that took a thousand
+    seconds to write and failed one check does not need to be written again.
+    """
     cfg = config
     difficulty = difficulty or cfg.session.difficulty_for(0)
     chosen = scenario or pick(rng)
@@ -299,17 +306,27 @@ async def generate_module(
         f"{INTERFACE.read_text()}\n```"
     )
     ask = base
+    if revise_from is not None:
+        previous, complaint = revise_from
+        ask = (
+            f"{base}\n\n## Your previous module was rejected\n\n"
+            f"```python\n{previous}\n```\n\n{complaint}\n\n"
+            "Fix exactly that and return the whole module again."
+        )
     payload: dict[str, object] | None = None
     last = ""
 
     for attempt in range(1, tries_per_stage + 1):
         outcome.attempts += 1
-        report_to(
-            f"writing question {question_number} \u2014 first try"
-            if attempt == 1
-            else f"writing question {question_number} \u2014 attempt "
-                 f"{attempt} of {tries_per_stage}"
-        )
+        if revise_from is not None and attempt == 1:
+            report_to(f"revising question {question_number}")
+        else:
+            report_to(
+                f"writing question {question_number} \u2014 first try"
+                if attempt == 1
+                else f"writing question {question_number} \u2014 attempt "
+                     f"{attempt} of {tries_per_stage}"
+            )
         try:
             with telemetry.stage("module"):
                 reply = await client.complete_text(
@@ -588,6 +605,7 @@ async def generate_question_as_module(
     max_attempts: int = 4,
     question_number: int = 1,
     check_sufficiency: bool = True,
+    repair_rounds: int = 3,
     report_to: Reporter = NULL_REPORTER,
 ) -> GenerationResult:
     """`generate_module`, gated and packaged like the monolithic path.
@@ -595,9 +613,17 @@ async def generate_question_as_module(
     The strategy produces an *ungated* question; the gate is the arbiter for
     every strategy or none of them are comparable. This is the seam that makes
     the two interchangeable at the call site.
+
+    A rejection is answered by revising the module before writing a new one.
+    Measured, a module costs between one and twenty minutes of provider time,
+    almost all of it spent waiting; discarding that because the brute force was
+    too fast is the expensive way to fix a cheap problem. Repairs have their
+    own budget, as they do on the monolithic path -- spending a regeneration
+    attempt on a fix would make `generation_attempts` mean two different things.
     """
     result = GenerationResult(question=None, attempts=[])
-    for attempt in range(max(1, max_attempts)):
+
+    for _ in range(max(1, max_attempts)):
         report_to.checkpoint()
         staged = await generate_module(
             client, config,
@@ -606,6 +632,67 @@ async def generate_question_as_module(
             question_number=question_number,
             report_to=report_to,
         )
+        rounds_left = max(0, repair_rounds)
+
+        while staged.question is not None:
+            report_to.checkpoint()
+            report_to(f"validating \u201c{staged.question.title}\u201d", kind="ok")
+            report = validate_question(
+                staged.question,
+                language=language,
+                languages=config.environment.languages,
+                report_to=report_to,
+            )
+            result.attempts.append(GenerationAttempt(
+                outcome=report.outcome,
+                detail=report.detail[:300],
+                title=staged.question.title,
+            ))
+
+            if report.outcome is GateOutcome.ACCEPTED:
+                # The gate proves the question is internally sound. It never
+                # reads the statement, so this is where we find out whether a
+                # candidate could derive the answer from what they are given.
+                gap = (
+                    await check_statement_sufficiency(
+                        client, staged.question, report.hidden_cases,
+                        language=language, report_to=report_to,
+                    )
+                    if check_sufficiency
+                    else None
+                )
+                if gap is None:
+                    report_to("the question passed every check", kind="ok")
+                    result.question = _gated(
+                        staged.question, report, language, config
+                    )
+                    return result
+                result.attempts.append(GenerationAttempt(
+                    outcome=gap.outcome,
+                    detail=gap.detail[:300],
+                    title=staged.question.title,
+                ))
+                report = gap
+
+            report_to(f"rejected: {report.detail}"[:300], kind="warn")
+            if not rounds_left or not staged.source:
+                break
+            rounds_left -= 1
+            report_to("asking for a fix rather than a new question")
+            # The gate's own complaint, with the module that earned it.
+            staged = await generate_module(
+                client, config,
+                difficulty=difficulty,
+                language=language,
+                question_number=question_number,
+                revise_from=(
+                    staged.source,
+                    "A validator rejected the question built from this "
+                    f"module:\n\n{report.detail}",
+                ),
+                report_to=report_to,
+            )
+
         if staged.question is None:
             bad = next((st for st in staged.stages if not st.ok), None)
             result.attempts.append(GenerationAttempt(
@@ -613,47 +700,6 @@ async def generate_question_as_module(
                 detail=(bad.error[:300] if bad else "no module"),
                 title="",
             ))
-            continue
+        report_to("starting over with a fresh question")
 
-        report_to(f"validating \u201c{staged.question.title}\u201d", kind="ok")
-        report = validate_question(
-            staged.question,
-            language=language,
-            languages=config.environment.languages,
-            report_to=report_to,
-        )
-        result.attempts.append(GenerationAttempt(
-            outcome=report.outcome,
-            detail=report.detail[:300],
-            title=staged.question.title,
-        ))
-        if report.outcome is GateOutcome.ACCEPTED:
-            # The gate proves the question is internally sound. It never reads
-            # the statement, so this is where we find out whether a candidate
-            # could derive the answer from what they are actually given. It is
-            # strategy-agnostic -- it takes a question, not a draft -- and
-            # leaving it out of this path turned a setting that says it is on
-            # into one that silently is not.
-            gap = (
-                await check_statement_sufficiency(
-                    client, staged.question, report.hidden_cases,
-                    language=language, report_to=report_to,
-                )
-                if check_sufficiency
-                else None
-            )
-            if gap is None:
-                report_to("the question passed every check", kind="ok")
-                result.question = _gated(staged.question, report, language, config)
-                return result
-            result.attempts.append(GenerationAttempt(
-                outcome=gap.outcome,
-                detail=gap.detail[:300],
-                title=staged.question.title,
-            ))
-            report = gap
-
-        report_to(f"rejected: {report.detail}"[:300], kind="warn")
-        if attempt + 1 < max(1, max_attempts):
-            report_to("starting over with a fresh question")
     return result

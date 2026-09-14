@@ -183,6 +183,9 @@ async def obtain_question(
                 max_attempts=max_attempts,
                 question_number=index + 1,
                 check_sufficiency=settings.check_statement_sufficiency,
+                repair_rounds=(
+                    settings.repair_rounds if repair_rounds is None else repair_rounds
+                ),
                 report_to=report_to,
             )
         else:
