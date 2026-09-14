@@ -82,7 +82,7 @@ A summary card shows what you are about to get before you press **Start**.
 
 ### While it generates
 
-Generation takes tens of seconds, because every question is executed and checked
+Generation takes one to several minutes, because every question is executed and checked
 before you see it. A panel names each step as it happens.
 
 **Cancel** stops the work, but it cannot interrupt a request already in flight to

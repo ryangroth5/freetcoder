@@ -77,13 +77,14 @@ when raised:
 
 | Variable | Default | Notes |
 |---|---|---|
+| `FREETCODER_GENERATION_STRATEGY` | `module` | How a question is asked for: `module` (the model writes a Python file we lint, type-check and run) or `monolithic` (one JSON payload). See [question-generation.md](docs/question-generation.md) |
 | `FREETCODER_GENERATION_ATTEMPTS` | `4` | Regenerations before giving up on a question |
 | `FREETCODER_REPAIR_ROUNDS` | `3` | Patch-and-re-gate rounds before regenerating |
 | `FREETCODER_CHECK_STATEMENT_SUFFICIENCY` | `1` | Second model solves from the prose alone; roughly doubles generation cost |
-| `FREETCODER_TOOL_CALL_BUDGET` | `6` | Code executions the model may make while repairing |
+| `FREETCODER_TOOL_CALL_BUDGET` | `6` | Code executions the model may make while repairing. `monolithic` only — the module strategy's critics already run the code |
 | `FREETCODER_TUTOR_TOOL_BUDGET` | `4` | Reference probes the tutor may make per reply |
 | `FREETCODER_TUTOR_MESSAGE_CAP` | `60` | Tutor messages per session |
-| `FREETCODER_LLM_TIMEOUT_S` | `120` | |
+| `FREETCODER_LLM_TIMEOUT_S` | `300` | Per request, not per question. A slow model writing a whole module can take minutes |
 | `FREETCODER_LLM_MAX_RETRIES` | `3` | |
 
 The HTTP API documents itself: **`/docs`** serves Swagger UI and
@@ -101,9 +102,25 @@ Server settings persist in the SQLite database, so they need a volume;
 pretending. Theme and default language are stored per browser instead, so two
 people sharing a container do not overwrite each other.
 
+**Which model.** The default is `anthropic/claude-sonnet-4.5`, which has not
+been measured on this pipeline. What has, on OpenRouter, three questions each:
+
+| model | accepted | first try | complete prose |
+|---|---|---|---|
+| `deepseek/deepseek-v4.1-flash` | 3/3 | 3/3 | 3/3 |
+| `moonshotai/kimi-k2.5` | 2/3 | 2/2 | 2/2 |
+| `z-ai/glm-4.6` | 2/3 | 0/2 | 1/2 |
+
+Three questions per model is thin evidence and worth treating as such, but
+`deepseek-v4.1-flash` is the one to reach for on a budget: it was the only one
+that took no revision rounds, and the fastest. `deepseek/deepseek-chat` is not
+a coding model and fails this pipeline; do not confuse the two.
+
 **Local models.** Point the base URL at `http://host.docker.internal:11434/v1`
 for Ollama and use any non-empty key. Smaller models often fail the solvability
-gate repeatedly — check the acceptance rate before blaming the app:
+gate repeatedly — check the acceptance rate before blaming the app. This runs
+whichever strategy the server is set to, so it measures what you would actually
+get:
 
 ```bash
 docker compose run --rm dev python -m freetcoder.generate --style leetcode -n 10
@@ -204,7 +221,8 @@ and a baffling failure.
 
 ### Told what is happening, and whether it is real
 
-Generation takes tens of seconds, so a panel names each step as it runs, with a
+Generation takes one to several minutes — nearly all of it waiting on the
+provider — so a panel names each step as it runs, with a
 cancel that is honest about what it cannot interrupt.
 
 A status dot next to Settings says whether the app is really talking to a
@@ -281,7 +299,7 @@ isolation and would weaken the boundary here.
 
 Optional. With no volume the database is in memory and everything works, just
 forgetfully. Attaching one caches **gate-approved questions**, which is the real
-payoff — generating and validating a question costs tokens and tens of seconds,
+payoff — generating and validating a question costs tokens and minutes,
 so replaying one is a large win. Attempt history and server settings are kept
 too.
 

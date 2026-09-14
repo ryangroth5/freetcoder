@@ -50,7 +50,12 @@ class Settings(BaseSettings):
     #: nothing lands in plaintext on a mounted volume.
     llm_api_key: str = ""
     llm_model: str = "anthropic/claude-sonnet-4.5"
-    llm_timeout_s: float = 120.0
+    #: Per *request*, not per question. It was sized for the JSON path, where
+    #: one call produced a whole question; the module path makes several and
+    #: measured totals reached 479s on kimi-k2.5 and 1181s on glm-4.6. A single
+    #: call that overruns is retried `llm_max_retries` times, so too tight a
+    #: value spends minutes producing nothing.
+    llm_timeout_s: float = 300.0
     llm_max_retries: int = 3
 
     #: Empty path means in-memory: the container has no persistent filesystem

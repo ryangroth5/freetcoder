@@ -20,6 +20,7 @@ from ..formats import DifficultyLockedError, load_styles, resolve
 from ..llm import FakeLLM, LLMClient, build_client
 from ..models import Difficulty, GatedQuestion, GateOutcome
 from ..settings import get_settings
+from .module import generate_question_as_module
 from .pipeline import generate_question
 
 
@@ -36,6 +37,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--difficulty", default=None, choices=[d.value for d in Difficulty])
     p.add_argument("-n", "--count", type=int, default=1)
     p.add_argument("--attempts", type=int, default=4)
+    p.add_argument("--strategy", default=None, choices=["module", "monolithic"],
+                   help="default: whatever the server is configured to use")
     p.add_argument("--out", type=Path, default=None, help="write accepted questions here")
     p.add_argument("--fixture", default=None,
                    help="replay a recorded fixture instead of calling an LLM")
@@ -73,17 +76,29 @@ async def _run(args: argparse.Namespace) -> int:
     if config.generation.source == "imported":
         preview = config.generation.import_text.replace("\n", " ")[:70]
         print(f"source : imported -- {preview}...")
-    print(f"asking : {args.count} question(s), up to {args.attempts} attempts each\n")
+    strategy = args.strategy or get_settings().generation_strategy
+    print(f"asking : {args.count} question(s), up to {args.attempts} attempts each")
+    print(f"how    : {strategy}\n")
 
     reasons: collections.Counter[GateOutcome] = collections.Counter()
     accepted: list[GatedQuestion] = []
     for i in range(args.count):
         difficulty = config.session.difficulty_for(min(i, config.session.question_count - 1))
-        result = await generate_question(
-            client, config, difficulty=difficulty,
-            max_attempts=args.attempts,
-            exclude_titles=[q.title for q in accepted],
-        )
+        # The strategy the product would use, unless told otherwise. This is
+        # the README's "is my model good enough" tool; measuring the path the
+        # app no longer takes answers a question nobody asked.
+        if strategy == "module":
+            result = await generate_question_as_module(
+                client, config, difficulty=difficulty,
+                max_attempts=args.attempts,
+                question_number=i + 1,
+            )
+        else:
+            result = await generate_question(
+                client, config, difficulty=difficulty,
+                max_attempts=args.attempts,
+                exclude_titles=[q.title for q in accepted],
+            )
         for a in result.attempts:
             reasons[a.outcome] += 1
         if result.accepted and result.question is not None:
