@@ -15,3 +15,7 @@ frontend/test-results/
 playwright-report/
 .DS_Store
 *.bak
+
+# Bench artifacts: run output, not source.
+bench-*.json
+bench-*.log
