@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import { Markdown } from './Markdown'
 import type { ChatMessage, Language } from '../api'
 import { useStore } from '../store'
 
@@ -143,14 +144,29 @@ function Bubble({ message, pending }: { message: ChatMessage; pending?: boolean 
     <div data-role={message.role} className={mine ? 'text-right' : ''}>
       <div
         className={[
-          'inline-block max-w-[90%] whitespace-pre-wrap rounded px-3 py-2 text-left text-sm',
+          'inline-block max-w-[90%] rounded px-3 py-2 text-left text-sm',
           mine
-            ? 'bg-[var(--color-accent)] text-white'
+            ? 'whitespace-pre-wrap bg-[var(--color-accent)] text-white'
             : 'bg-[var(--color-panel)] text-[var(--color-ink)]',
+          // The renderer gives every block its own vertical margin, which
+          // inside a bubble reads as lopsided padding. Collapse the outermost
+          // ones; the gaps between blocks are what make it readable.
+          mine ? '' : '[&_>div>*:first-child]:mt-0 [&_>div>*:last-child]:mb-0',
           pending ? 'opacity-90' : '',
         ].join(' ')}
       >
-        {message.content}
+        {mine ? (
+          // Left alone deliberately: a candidate pasting their own code should
+          // see it back exactly as they typed it, not reinterpreted as
+          // emphasis or a heading because it happened to contain * or #.
+          message.content
+        ) : (
+          // The tutor writes markdown whether or not anyone asked it to --
+          // backticks around identifiers, a numbered list of steps, the
+          // occasional fenced snippet -- and this used to render as literal
+          // asterisks and stray backticks.
+          <Markdown>{message.content}</Markdown>
+        )}
         {pending && <span className="ml-1 animate-pulse">▍</span>}
       </div>
     </div>

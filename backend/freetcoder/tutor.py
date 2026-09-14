@@ -59,6 +59,10 @@ can check.
 
 You cannot see the reference solution and you cannot see the hidden test cases.
 Say so plainly if asked, rather than inventing either.
+
+Your replies are rendered as Markdown, so backticks around identifiers, short
+fenced snippets and the occasional list all come out properly. Keep it light:
+this is a narrow chat pane beside an editor, not a document. No headings.
 """
 
 
