@@ -342,6 +342,7 @@ async def generate_module(
             continue
 
         source = extract_code(reply)
+        report_to(f"the model answered with {len(source)} characters; checking it")
         fault, payload = module_fault(source, wanted=wanted, report_to=report_to)
         if not fault:
             result.source = source

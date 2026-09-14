@@ -98,7 +98,14 @@ export function GenerationProgress({ runId, onCancelled }: {
         <span className="text-sm font-medium">
           {cancelling ? 'Cancelling…' : 'Building your question'}
         </span>
-        <span className="font-mono text-xs tabular-nums text-[var(--color-muted)]">
+        <span
+          className="font-mono text-xs tabular-nums text-[var(--color-muted)]"
+          title={
+            run?.provider_seconds
+              ? `${run.provider_seconds.toFixed(1)}s of it waiting on the model`
+              : undefined
+          }
+        >
           {elapsed.toFixed(1)}s
         </span>
         <button

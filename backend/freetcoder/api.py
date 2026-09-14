@@ -23,7 +23,7 @@ from .formats import (
     unsupported_topics,
 )
 from .library import QuestionLibrary, build_library
-from .llm import FakeLLM, llm_status
+from .llm import FakeLLM, llm_status, telemetry
 from .models import Difficulty, GatedQuestion, Language, TestCase
 from .progress import GenerationCancelled, Reporter, Run, registry
 from .scoring import QuestionScore, score_session
@@ -367,6 +367,29 @@ def _resolve_or_400(payload: CreateSessionRequest) -> FormatConfig:
 
 
 # ---------------------------------------------------------------- sessions
+
+def _spent(reporter: Reporter, provider_seconds: float) -> str:
+    """The last line of the log: where the time actually went.
+
+    Measured, our own share -- lint, type-check, the probe, the gate running
+    the reference and the brute force -- is about two seconds. Saying so turns
+    "this is slow" from a complaint about the app into a fact about the
+    provider, or occasionally the other way round, which is the point.
+    """
+    total = reporter.elapsed
+    ours = max(0.0, total - provider_seconds)
+    return (
+        f"took {_clock(total)}: {_clock(provider_seconds)} waiting on the model, "
+        f"{_clock(ours)} checking it"
+    )
+
+
+def _clock(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{int(seconds // 60)}m {int(seconds % 60):02d}s"
+
+
 @router.post("/sessions")
 async def create_session(request: Request, payload: CreateSessionRequest) -> dict[str, Any]:
     config = _resolve_or_400(payload)
@@ -383,22 +406,33 @@ async def create_session(request: Request, payload: CreateSessionRequest) -> dic
     if payload.progress_id:
         registry.start(payload.progress_id)
 
-    try:
-        obtained = await obtain_question(
-            store, client, config, 0,
-            language=payload.language, report_to=reporter,
-        )
-    except GenerationCancelled:
-        registry.finish(payload.progress_id, "cancelled")
-        raise HTTPException(409, "Generation cancelled.") from None
+    # Time the provider separately from ourselves. Without this the only
+    # honest answer to "why did that take eighteen minutes?" was to read
+    # container logs with a stopwatch, which is what it took to find a single
+    # call that ran for 857 seconds against a timeout that could not expire.
+    with telemetry.collecting() as calls:
+        try:
+            obtained = await obtain_question(
+                store, client, config, 0,
+                language=payload.language, report_to=reporter,
+            )
+        except GenerationCancelled:
+            registry.finish(
+                payload.progress_id, "cancelled", provider_seconds=calls.seconds
+            )
+            raise HTTPException(409, "Generation cancelled.") from None
 
-    if obtained is None:
-        registry.finish(payload.progress_id, "failed")
-        raise HTTPException(
-            502, "The model could not produce a question that passed validation. "
-                 "Try again, or pick a different concentration.",
-        )
-    registry.finish(payload.progress_id, "accepted")
+        if obtained is None:
+            reporter(_spent(reporter, calls.seconds), kind="warn")
+            registry.finish(
+                payload.progress_id, "failed", provider_seconds=calls.seconds
+            )
+            raise HTTPException(
+                502, "The model could not produce a question that passed validation. "
+                     "Try again, or pick a different concentration.",
+            )
+        reporter(_spent(reporter, calls.seconds), kind="ok")
+    registry.finish(payload.progress_id, "accepted", provider_seconds=calls.seconds)
     qid, _ = obtained
     sid = await store.create_session(config, [qid])
     return await get_session(request, sid)

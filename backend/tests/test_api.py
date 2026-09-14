@@ -817,3 +817,25 @@ class TestComputeExpected:
         resp = await client.post("/api/sessions/nope/questions/0/compute",
                                  json={"args": {}})
         assert resp.status_code == 404
+
+
+class TestTheProgressLogAccountsForTheTime:
+    async def test_the_last_line_splits_provider_from_us(
+        self, client: AsyncClient
+    ) -> None:
+        """The number that turns "this is slow" into a fact about whose fault
+        it is."""
+        run_id = "acct-1"
+        resp = await client.post(
+            "/api/sessions", json={"style": "leetcode", "progress_id": run_id}
+        )
+        assert resp.status_code == 200, resp.text
+
+        progress = await client.get(f"/api/progress/{run_id}")
+        body = progress.json()
+        assert body["finished"] and body["outcome"] == "accepted"
+        summary = body["steps"][-1]["message"]
+        assert summary.startswith("took ")
+        assert "waiting on the model" in summary
+        assert "checking it" in summary
+        assert "provider_seconds" in body

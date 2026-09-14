@@ -158,6 +158,10 @@ async def check_statement_sufficiency(
     if not sample:
         return None
 
+    # The reply has landed; what follows is execution, and it was silent. A
+    # long gap with no step in the log reads as a hang, and it is exactly where
+    # 193 unaccounted seconds hid in a real run.
+    report_to(f"running that solution against {len(sample)} cases")
     adapter = get_adapter(language)
     result = run_source(
         language,

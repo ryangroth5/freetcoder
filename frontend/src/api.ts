@@ -229,6 +229,9 @@ export interface ProgressRun {
    *  survives a reload -- `started_at` is a monotonic reading and is useless
    *  to us on its own. */
   elapsed: number
+  /** Of `elapsed`, how much was spent waiting on the provider. Our own share
+   *  is about two seconds, so this is very nearly all of it. */
+  provider_seconds: number
 }
 
 export interface ChatMessage {

@@ -258,3 +258,52 @@ class TestCancelBeforeTheRequestArrives:
         reg.start("plain")
         reg.start("plain")
         assert reg.is_cancelled("plain") is False
+
+
+class TestTheLogSaysWhereTheTimeWent:
+    """Every provider call was already timed and the numbers were discarded
+    outside the bench, so "why did that take eighteen minutes?" could only be
+    answered by reading container logs with a stopwatch. It took exactly that
+    to find a single call running 857 seconds against a timeout that could not
+    expire."""
+
+    def test_a_finished_run_records_the_provider_share(self) -> None:
+        from freetcoder.progress import ProgressRegistry
+
+        reg = ProgressRegistry()
+        reg.start("r1")
+        reg.finish("r1", "accepted", provider_seconds=123.456)
+        run = reg.get("r1")
+        assert run is not None
+        assert run.provider_seconds == 123.46
+
+    def test_it_defaults_to_zero_rather_than_guessing(self) -> None:
+        from freetcoder.progress import ProgressRegistry
+
+        reg = ProgressRegistry()
+        reg.start("r2")
+        reg.finish("r2", "accepted")
+        run = reg.get("r2")
+        assert run is not None and run.provider_seconds == 0.0
+
+    def test_the_share_is_serialised_to_the_client(self) -> None:
+        from freetcoder.progress import ProgressRegistry
+
+        reg = ProgressRegistry()
+        reg.start("r3")
+        reg.finish("r3", "accepted", provider_seconds=7.0)
+        run = reg.get("r3")
+        assert run is not None
+        assert run.model_dump()["provider_seconds"] == 7.0
+
+    def test_a_reporter_knows_how_long_its_run_has_taken(self) -> None:
+        from freetcoder.progress import ProgressRegistry, Reporter
+
+        reg = ProgressRegistry()
+        reg.start("r4")
+        assert Reporter(reg, "r4").elapsed >= 0.0
+
+    def test_a_reporter_with_no_registry_says_zero(self) -> None:
+        from freetcoder.progress import NULL_REPORTER
+
+        assert NULL_REPORTER.elapsed == 0.0

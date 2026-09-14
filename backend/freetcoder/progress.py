@@ -61,6 +61,13 @@ class Run(BaseModel):
     outcome: str = ""
     #: Monotonic reading at `finish`. Only meaningful next to `started_at`.
     ended_at: float | None = None
+    #: Seconds spent waiting on the provider, of `elapsed`.
+    #:
+    #: Every call was already timed and the numbers were thrown away outside
+    #: the bench, so "why did that take eighteen minutes?" could only be
+    #: answered by reading container logs with a stopwatch. Measured, our own
+    #: work is about two seconds: this is the number that says so.
+    provider_seconds: float = 0.0
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -113,7 +120,13 @@ class ProgressRegistry:
                      kind=kind, message=message)
             )
 
-    def finish(self, run_id: str | None, outcome: str) -> None:
+    def finish(
+        self,
+        run_id: str | None,
+        outcome: str,
+        *,
+        provider_seconds: float | None = None,
+    ) -> None:
         if not run_id:
             return
         with self._lock:
@@ -123,6 +136,8 @@ class ProgressRegistry:
             run.finished = True
             run.outcome = outcome
             run.ended_at = time.monotonic()
+            if provider_seconds is not None:
+                run.provider_seconds = round(provider_seconds, 2)
 
     def cancel(self, run_id: str) -> bool:
         """Ask a run to stop. False if it is unknown or already finished."""
@@ -177,6 +192,14 @@ class Reporter:
     def __call__(self, message: str, kind: StepKind = "info") -> None:
         if self._registry is not None:
             self._registry.step(self._run_id, message, kind)
+
+    @property
+    def elapsed(self) -> float:
+        """Seconds since the run began, or 0 when nothing is being recorded."""
+        if self._registry is None or not self._run_id:
+            return 0.0
+        run = self._registry.get(self._run_id)
+        return run.elapsed if run is not None else 0.0
 
     def checkpoint(self) -> None:
         """Stop here if the run was cancelled.
