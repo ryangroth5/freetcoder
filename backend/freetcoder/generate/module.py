@@ -151,25 +151,28 @@ def probe_module(source: str, *, wanted: int) -> ProbeResult:
             ["python3", "-I", "_probe.py"], ws.path,
             limits=PROBE_LIMITS, env={"FTC_WANTED": str(wanted)},
         )
+        # Read before the workspace is torn down.
+        written = Path(ws.path) / "_result.json"
+        record = None
+        if written.exists():
+            try:
+                record = json.loads(written.read_text())
+            except (json.JSONDecodeError, OSError):
+                record = None
+
+    if record is not None:
+        if record.get("ok"):
+            return ProbeResult(ok=True, payload=record)
+        return ProbeResult(
+            ok=False, step=str(record.get("step", "")),
+            detail=str(record.get("detail", "")),
+        )
 
     if result.verdict is Verdict.TIMEOUT:
         return ProbeResult(
             ok=False, step="timeout",
             detail="the module did not finish; solution or generate_cases is too slow",
         )
-
-    for line in result.stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict) and record.get("__freetcoder"):
-            if record.get("ok"):
-                return ProbeResult(ok=True, payload=record)
-            return ProbeResult(
-                ok=False, step=str(record.get("step", "")),
-                detail=str(record.get("detail", "")),
-            )
 
     # Say what it *did* produce. "no result" alone gives nothing to act on,
     # and the interesting case is a module that printed something instead.

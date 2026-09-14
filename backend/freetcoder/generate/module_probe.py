@@ -16,13 +16,19 @@ from __future__ import annotations
 PROBE = '''
 import io, json, os, sys, random, inspect, traceback
 
-_OUT = sys.stdout
 sys.stdout = io.StringIO()          # the module's own output goes nowhere useful
-_MARK = "__freetcoder"
+_RESULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_result.json")
 
 def emit(rec):
-    rec[_MARK] = 1
-    print(json.dumps(rec, default=str), file=_OUT, flush=True)
+    """Write the result to a file, not to stdout.
+
+    stdout is shared with whatever the module decides to print, and a module
+    that writes to the real handle -- sys.__stdout__, os.write(1, ...) -- can
+    interleave with the record and make valid JSON unparseable. A file has no
+    such contention.
+    """
+    with open(_RESULT, "w") as fh:
+        json.dump(rec, fh, default=str)
 
 def fail(step, detail):
     emit({"ok": False, "step": step, "detail": str(detail)[:1500]})

@@ -279,3 +279,35 @@ class TestALargePayloadSurvives:
         assert probed.ok, f"{probed.step}: {probed.detail}"
         assert probed.payload is not None
         assert len(probed.payload["cases"]) == 40  # type: ignore[arg-type]
+
+
+class TestTheResultCannotBeCorrupted:
+    """The probe reports through a file, not stdout.
+
+    stdout is shared with whatever the module prints, and a module that writes
+    to the real handle can interleave with the record and make valid JSON
+    unparseable -- which is what happened to a complete and correct payload.
+    """
+
+    def test_a_module_that_writes_to_the_real_stdout_is_still_read(self) -> None:
+        noisy = GOOD.replace(
+            "def solution(levels: list[int], drift: int) -> int:",
+            "import sys\n\n\ndef solution(levels: list[int], drift: int) -> int:\n"
+            "    sys.__stdout__.write('noise that is not json\\n')",
+        )
+        probed = probe_module(noisy, wanted=12)
+        assert probed.ok, f"{probed.step}: {probed.detail}"
+        assert probed.payload is not None
+        assert probed.payload["title"] == "Steady Tide Windows"
+
+    def test_a_module_printing_a_forged_record_cannot_impersonate_one(self) -> None:
+        """The result is a file we name; nothing printed can become it."""
+        forger = GOOD.replace(
+            "def solution(levels: list[int], drift: int) -> int:",
+            "import sys\n\n\ndef solution(levels: list[int], drift: int) -> int:\n"
+            "    sys.__stdout__.write('{\"ok\": true, \"title\": \"Forged\"}\\n')",
+        )
+        probed = probe_module(forger, wanted=12)
+        assert probed.ok
+        assert probed.payload is not None
+        assert probed.payload["title"] == "Steady Tide Windows"
