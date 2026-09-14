@@ -6,6 +6,25 @@ const POLL_MS = 900
 const TICK_MS = 100
 
 /**
+ * How long each step took, and which one is still running.
+ *
+ * `at` is when a step *started*, so a step's duration is the gap to the next
+ * one. The last step has no next one because it has not finished, which is
+ * exactly the number a reader watching a slow generation wants.
+ */
+export function stepTimings(
+  steps: { at: number }[],
+  elapsed: number,
+  finished: boolean,
+): { took: number; running: boolean }[] {
+  return steps.map((step, i) => {
+    const last = i === steps.length - 1
+    const until = last ? elapsed : steps[i + 1].at
+    return { took: Math.max(0, until - step.at), running: last && !finished }
+  })
+}
+
+/**
  * What generation is actually doing.
  *
  * A truthful log rather than a progress bar: attempts and repair rounds are
@@ -70,6 +89,7 @@ export function GenerationProgress({ runId, onCancelled }: {
   const elapsed = finished
     ? (run?.elapsed ?? 0)
     : anchor.current.elapsed + (Date.now() - anchor.current.at) / 1000
+  const timings = stepTimings(steps, elapsed, finished)
 
   return (
     <div className="mt-4 rounded border border-[var(--color-edge)]
@@ -104,22 +124,14 @@ export function GenerationProgress({ runId, onCancelled }: {
         <p className="text-xs text-[var(--color-muted)]">Starting…</p>
       ) : (
         <ol className="space-y-1">
-          {steps.map((step, i) => {
-            const last = i === steps.length - 1
-            // `at` is when a step *started*, so its duration is the gap to the
-            // next one. The last step has no next one -- it is still running,
-            // unless the run is over.
-            const until = last ? elapsed : steps[i + 1].at
-            return (
-              <StepRow
-                key={i}
-                step={step}
-                latest={last}
-                took={Math.max(0, until - step.at)}
-                running={last && !finished}
-              />
-            )
-          })}
+          {steps.map((step, i) => (
+            <StepRow
+              key={i}
+              step={step}
+              latest={i === steps.length - 1}
+              {...timings[i]}
+            />
+          ))}
         </ol>
       )}
 
