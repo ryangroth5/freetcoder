@@ -635,3 +635,66 @@ these models are already tuned for.
 - Rate limiting (HTTP 429 from an upstream shared pool) is now legible rather
   than arriving as a generic failure, because the client reports the provider's
   own error text.
+
+### What the module strategy still had to learn
+
+Measuring it was not the same as shipping it. Four things `GeneratedQuestion`
+supports and the module path never set would have been dropped silently by the
+switch:
+
+| name | who consumes it |
+|---|---|
+| `hint_md` | `give_hints`, shown to the candidate |
+| `complexity_target` | the gate measures the reference against it when `perf_tests` is on |
+| `clarifications` | the gate executes each `probe` against the reference |
+| a second language | `_check_other_languages`, and `execute_against` |
+
+The interface declares `HINT`, `COMPLEXITY` and `CLARIFICATIONS`
+unconditionally — the contract a model reads should not change shape between
+formats — and the prompt says which are wanted. An unasked-for name stays `""`
+and is dropped on the way out, rather than trusting the model's restraint.
+
+Clarifications carry a `probe` but no `expect`, for the reason hidden cases
+carry inputs only: asking a model what its own code returns is asking it to
+guess. The probe calls `solution`.
+
+The last gap was the interesting one. The strategy built exactly one signature
+and stamped it with whatever language it was handed, so a format offering
+Python *and* JavaScript — which `leetcode` does — cached a Python-only
+question. The gate rejects that, and `execute_against` answers
+`INTERNAL_ERROR` for the other language. Its own tests had been resolving
+`leetcode` without saying what they wanted, so they had been building
+single-language questions against a two-language format and not noticing.
+
+Only `solution` and the scaffold cross the language boundary.
+`generate_cases`, `is_valid` and `brute_force` stay Python, because Python is
+the oracle: another language's job is to reproduce its answers, not to hold
+opinions. That is the split `_check_other_languages` already assumed.
+
+### Is TypeScript worth measuring separately?
+
+No — not as a bench dimension. Measuring a strategy means scoring first-pass
+acceptance of a whole question. Translation is not a strategy: it moves one
+function and a scaffold, and the gate validates it by *executing* it against
+the Python oracle's answers on eight sampled cases. There is no statement, no
+constraints and no case generator to get wrong, so it is pass/fail
+conformance, not quality.
+
+What it gets instead is a counter: `translations_attempted` and
+`translations_ok` on the quality report. If the rate is high, TypeScript is a
+non-issue. If it is low it earns a dimension then, from data rather than up
+front.
+
+## Choosing a strategy
+
+`generation_strategy` (settings, `FREETCODER_GENERATION_STRATEGY`) is `module`
+by default and `monolithic` as the escape hatch. Monolithic is also forced,
+whatever the setting says, when a format supplies `import_text`: adapting
+prose someone else wrote is the one thing the module interface has no
+equivalent for.
+
+The strategy is part of the cache key. The two do not produce interchangeable
+questions, and a fallback cache that might hand back either would make a
+change in generation quality unobservable. Keys from before that segment
+existed can never match again, so they are deleted on migration — except any
+question a session is still using.

@@ -13,9 +13,10 @@ const SERVER_FIELDS: {
   name: string
   label: string
   hint?: string
-  kind: 'text' | 'number' | 'bool'
+  kind: 'text' | 'number' | 'bool' | 'choice'
   min?: number
   max?: number
+  options?: { value: string; label: string }[]
 }[] = [
   { name: 'llm_base_url', label: 'LLM endpoint', kind: 'text',
     hint: 'Any OpenAI-compatible API' },
@@ -28,6 +29,13 @@ const SERVER_FIELDS: {
   { name: 'check_statement_sufficiency', kind: 'bool',
     label: 'Check questions are solvable from their statement',
     hint: 'A second model solves from the prose alone. Catches unfair questions; roughly doubles generation cost.' },
+  { name: 'generation_strategy', label: 'How questions are written',
+    kind: 'choice',
+    options: [
+      { value: 'module', label: 'As a Python module (recommended)' },
+      { value: 'monolithic', label: 'As a JSON payload (legacy)' },
+    ],
+    hint: 'A module is linted, type-checked and executed before you see it. The JSON path asks for code inside a data format, which models escape badly.' },
   { name: 'generation_attempts', label: 'Generation attempts', kind: 'number',
     min: 1, max: 10, hint: 'Regenerations before giving up on a question' },
   { name: 'repair_rounds', label: 'Repair rounds', kind: 'number',
@@ -253,7 +261,19 @@ export function SettingsScreen() {
               onReset={settings.sources[f.name] === 'saved'
                 ? () => reset(f.name) : undefined}
             >
-              {f.kind === 'bool' ? (
+              {f.kind === 'choice' ? (
+                <select
+                  aria-label={f.label}
+                  value={String(draft[f.name] ?? '')}
+                  onChange={(e) =>
+                    setDraft({ ...draft, [f.name]: e.target.value })}
+                  className={inputClass}
+                >
+                  {f.options?.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              ) : f.kind === 'bool' ? (
                 <input
                   type="checkbox"
                   aria-label={f.label}
