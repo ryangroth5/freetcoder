@@ -7,7 +7,7 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +30,7 @@ SETTABLE: frozenset[str] = frozenset({
     "repair_rounds",
     "tool_call_budget",
     "check_statement_sufficiency",
+    "generation_strategy",
     "tutor_tool_budget",
     "tutor_message_cap",
     "library_url",
@@ -57,6 +58,19 @@ class Settings(BaseSettings):
     db_path: str = ""
     static_dir: Path | None = None
     dev: bool = False
+
+    #: How a question is asked for.
+    #:
+    #: "module" asks for a Python module implementing a fixed interface and
+    #: validates it by lint, type-check and execution. "monolithic" asks for a
+    #: 14-field JSON payload. Measured over four days, monolithic was accepted
+    #: 0 times in 3 and module 4 in 6 -- every failure we fixed was a
+    #: serialisation failure rather than a reasoning one, because code inside a
+    #: data format has to be escaped and models escape it badly.
+    #:
+    #: Monolithic stays reachable because it is the only path that can adapt
+    #: supplied prose (`import_text`), and as an escape hatch.
+    generation_strategy: Literal["module", "monolithic"] = "module"
 
     #: How many times to regenerate before giving up on a question slot.
     generation_attempts: int = 4

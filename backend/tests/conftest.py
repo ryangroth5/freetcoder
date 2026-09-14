@@ -38,6 +38,13 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]
 
     monkeypatch.setenv("FREETCODER_DB_PATH", "")
     monkeypatch.setenv("FREETCODER_LIBRARY_URL", "")
+    # The product default is "module", and `test_service_strategy.py` exercises
+    # it end to end. The broad API tests stay on the monolithic path because
+    # its FakeLLM payload is a dict rather than a module that has to be linted,
+    # type-checked and executed: making every one of them generate a real
+    # module would add minutes to the suite to re-test one seam. Tests that
+    # care about the strategy set it themselves.
+    monkeypatch.setenv("FREETCODER_GENERATION_STRATEGY", "monolithic")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

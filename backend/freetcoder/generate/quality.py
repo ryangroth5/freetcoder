@@ -86,6 +86,12 @@ class QualityReport:
     bounds_every_parameter: bool = False
     clarification_count: int = 0
     has_hint: bool = False
+    #: A complexity target was stated. The gate measures it separately; this
+    #: only records whether the question makes the claim at all.
+    states_complexity: bool = False
+    #: How many languages the candidate can actually attempt this in. A
+    #: question offering fewer than its format promises is unservable.
+    language_count: int = 0
     #: Matched a published problem's canonical example inputs, or its title.
     recalled_example: str = ""
     recalled_title: str = ""
@@ -101,6 +107,13 @@ class QualityReport:
     seconds: float = 0.0
     provider_seconds: float = 0.0
     completion_tokens: int = 0
+    #: Translation into the format's other languages: how many were attempted
+    #: and how many produced a reference that agreed with the Python oracle.
+    #: A plain counter rather than a bench dimension -- translating one function
+    #: is a conformance check, not a strategy, so it has a success rate and not
+    #: a quality score.
+    translations_attempted: int = 0
+    translations_ok: int = 0
 
     @property
     def looks_recalled(self) -> bool:
@@ -152,6 +165,8 @@ def score_question(
         ),
         clarification_count=len(q.clarifications),
         has_hint=bool(q.hint_md and q.hint_md.strip()),
+        states_complexity=bool(q.complexity_target and q.complexity_target.strip()),
+        language_count=len(q.signatures),
     )
 
     title_key = _normalise(q.title)

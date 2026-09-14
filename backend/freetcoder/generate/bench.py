@@ -30,7 +30,7 @@ from .module import generate_module
 from .pipeline import generate_question
 from .quality import Scorecard, score_question
 from .scenarios import pick as pick_scenario
-from .staged import generate_delimited, generate_flat, generate_staged
+from .staged import StageOutcome, generate_delimited, generate_flat, generate_staged
 
 PROMPTS = Path(__file__).parent / "prompts"
 
@@ -104,6 +104,7 @@ async def run_variant(
         scenario = pick_scenario() if seed else ""
         started = time.monotonic()
         card.attempted += 1
+        translated: list[StageOutcome] = []
         with telemetry.collecting() as calls:
             if strategy in {"staged", "flat", "delimited", "module"}:
                 build = {
@@ -121,11 +122,19 @@ async def run_variant(
                 # The staged path returns an unvalidated question; the gate is
                 # the same arbiter for both strategies or the comparison means
                 # nothing.
+                # Gate against every language the format offers, which is what
+                # the product serves. Gating Python alone would score a
+                # question the candidate cannot actually attempt.
                 outcome = (
-                    validate_question(question).outcome
+                    validate_question(
+                        question, languages=config.environment.languages
+                    ).outcome
                     if question is not None
                     else GateOutcome.SCHEMA_INVALID
                 )
+                translated = [
+                    st for st in staged.stages if st.name.startswith("translate:")
+                ]
                 # Carry the stage's own complaint, not just its name. Without
                 # it every failure reads "question" and needs a separate run to
                 # find out what was actually wrong.
@@ -167,6 +176,8 @@ async def run_variant(
         report.seconds = round(elapsed, 1)
         report.provider_seconds = round(calls.seconds, 1)
         report.completion_tokens = calls.completion_tokens
+        report.translations_attempted = len(translated)
+        report.translations_ok = sum(1 for st in translated if st.ok)
         card.reports.append(report)
 
         flags = []

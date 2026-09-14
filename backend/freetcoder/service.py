@@ -164,24 +164,37 @@ async def obtain_question(
     provider, or a model that cannot get a question past the gate.
     """
     from .generate import generate_question  # local import: avoids a cycle
+    from .generate.module import generate_question_as_module
+    from .settings import get_settings
 
+    settings = get_settings()
     difficulty = config.session.difficulty_for(min(index, config.session.question_count - 1))
-    key = cache_key(config, difficulty.value, language)
+    # Imported prose can only be adapted by the monolithic path, whatever the
+    # setting says: the module interface has no equivalent of `import_text`.
+    strategy = (
+        "monolithic" if config.generation.import_text else settings.generation_strategy
+    )
+    key = cache_key(config, difficulty.value, language, strategy)
 
     if _can_generate(client):
-        from .settings import get_settings
-
-        settings = get_settings()
-        result = await generate_question(
-            client, config, difficulty=difficulty, language=language,
-            max_attempts=max_attempts,
-            repair_rounds=(
-                settings.repair_rounds if repair_rounds is None else repair_rounds
-            ),
-            tool_budget=settings.tool_call_budget,
-            check_sufficiency=settings.check_statement_sufficiency,
-            report_to=report_to,
-        )
+        if strategy == "module":
+            result = await generate_question_as_module(
+                client, config, difficulty=difficulty, language=language,
+                max_attempts=max_attempts,
+                question_number=index + 1,
+                report_to=report_to,
+            )
+        else:
+            result = await generate_question(
+                client, config, difficulty=difficulty, language=language,
+                max_attempts=max_attempts,
+                repair_rounds=(
+                    settings.repair_rounds if repair_rounds is None else repair_rounds
+                ),
+                tool_budget=settings.tool_call_budget,
+                check_sufficiency=settings.check_statement_sufficiency,
+                report_to=report_to,
+            )
         if result.accepted and result.question is not None:
             qid = await store.cache_question(key, result.question)
             return qid, result.question

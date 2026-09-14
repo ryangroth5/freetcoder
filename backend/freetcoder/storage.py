@@ -83,7 +83,12 @@ CREATE TABLE IF NOT EXISTS app_settings (
 """
 
 
-def cache_key(config: FormatConfig, difficulty: str, language: Language) -> str:
+def cache_key(
+    config: FormatConfig,
+    difficulty: str,
+    language: Language,
+    strategy: str = "module",
+) -> str:
     """Identity of an interchangeable question.
 
     Deliberately coarse: two requests differing only in freeform wording should
@@ -92,12 +97,16 @@ def cache_key(config: FormatConfig, difficulty: str, language: Language) -> str:
     The offered languages are part of the key. A question cached when only
     Python was offered carries no JavaScript signature, so replaying it would
     silently hand back a question the format cannot actually be solved in.
+
+    So is the strategy that produced it. The two do not produce interchangeable
+    questions -- the monolithic path is the one measured at zero acceptances --
+    and a fallback that may return either makes a quality change unobservable.
     """
     topics = ",".join(sorted(config.generation.topics))
     langs = ",".join(sorted(lang.value for lang in config.environment.languages))
     return (
         f"{config.generation.style}|{config.generation.preset_id}|{difficulty}"
-        f"|{language.value}|{topics}|{langs}"
+        f"|{language.value}|{topics}|{langs}|{strategy}"
     )
 
 
@@ -141,6 +150,30 @@ class Storage:
                     await self.db.execute(
                         f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
                     )
+        await self._drop_unkeyed_questions()
+
+    async def _drop_unkeyed_questions(self) -> None:
+        """Delete cached questions from before the key named a strategy.
+
+        They can never be read again -- `cache_key` now emits one more segment,
+        so nothing matches them -- and leaving them is worse than dead weight:
+        they were produced by the monolithic path, which measured zero
+        acceptances, and a fallback cache full of them would make the switch
+        look like it changed nothing.
+
+        A question still referenced by a session is kept regardless. Someone
+        halfway through a practice run should not lose the problem they are
+        looking at because the key format changed underneath them.
+        """
+        await self.db.execute(
+            "DELETE FROM questions "
+            # Six separators is the current key; anything shorter predates the
+            # strategy segment.
+            "WHERE length(cache_key) - length(replace(cache_key, '|', '')) < 6 "
+            "  AND NOT EXISTS ("
+            "        SELECT 1 FROM sessions s"
+            "         WHERE s.question_ids LIKE '%' || questions.id || '%')"
+        )
 
     async def close(self) -> None:
         if self._db is not None:

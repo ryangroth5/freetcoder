@@ -25,6 +25,7 @@ from ..llm import LLMClient, LLMError, telemetry
 from ..models import (
     Clarification,
     Difficulty,
+    GateOutcome,
     GeneratedQuestion,
     Language,
     ParamConstraint,
@@ -35,8 +36,9 @@ from ..progress import NULL_REPORTER, Reporter
 from ..runner import Limits, Verdict
 from ..runner.sandbox import Workspace, execute
 from .delimited import ParseError, parse_sections
+from .gate import validate_question
 from .module_probe import PROBE
-from .pipeline import _read_prompt
+from .pipeline import GenerationAttempt, GenerationResult, _gated, _read_prompt
 from .scenarios import pick
 from .staged import StagedResult, StageOutcome, _brief, reference_fault
 
@@ -528,3 +530,61 @@ async def translate_signature(
             "return both sections again."
         )
     return None, last
+
+
+async def generate_question_as_module(
+    client: LLMClient,
+    config: FormatConfig,
+    *,
+    difficulty: Difficulty | None = None,
+    language: Language = Language.PYTHON,
+    max_attempts: int = 4,
+    question_number: int = 1,
+    report_to: Reporter = NULL_REPORTER,
+) -> GenerationResult:
+    """`generate_module`, gated and packaged like the monolithic path.
+
+    The strategy produces an *ungated* question; the gate is the arbiter for
+    every strategy or none of them are comparable. This is the seam that makes
+    the two interchangeable at the call site.
+    """
+    result = GenerationResult(question=None, attempts=[])
+    for attempt in range(max(1, max_attempts)):
+        report_to.checkpoint()
+        staged = await generate_module(
+            client, config,
+            difficulty=difficulty,
+            language=language,
+            question_number=question_number,
+            report_to=report_to,
+        )
+        if staged.question is None:
+            bad = next((st for st in staged.stages if not st.ok), None)
+            result.attempts.append(GenerationAttempt(
+                outcome=GateOutcome.SCHEMA_INVALID,
+                detail=(bad.error[:300] if bad else "no module"),
+                title="",
+            ))
+            continue
+
+        report_to(f"validating \u201c{staged.question.title}\u201d", kind="ok")
+        report = validate_question(
+            staged.question,
+            language=language,
+            languages=config.environment.languages,
+            report_to=report_to,
+        )
+        result.attempts.append(GenerationAttempt(
+            outcome=report.outcome,
+            detail=report.detail[:300],
+            title=staged.question.title,
+        ))
+        if report.outcome is GateOutcome.ACCEPTED:
+            report_to("the question passed every check", kind="ok")
+            result.question = _gated(staged.question, report, language, config)
+            return result
+
+        report_to(f"rejected: {report.detail}"[:300], kind="warn")
+        if attempt + 1 < max(1, max_attempts):
+            report_to("starting over with a fresh question")
+    return result
