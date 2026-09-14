@@ -77,9 +77,15 @@ class Settings(BaseSettings):
 
     #: Patch-and-re-gate rounds per generated question, before regenerating.
     #: Bounded so a confused model cannot spend unlimited tokens or time.
+    #:
+    #: Applies to the monolithic strategy only. The module strategy revises
+    #: against its critics -- ruff, pyright, the probe -- inside generation,
+    #: and on a gate rejection it starts a fresh question rather than patching
+    #: one. Repairing a module after the gate is worth doing and is not built.
     repair_rounds: int = 3
 
     #: How many times the model may execute code while repairing one question.
+    #: Monolithic strategy only, for the same reason as `repair_rounds`.
     tool_call_budget: int = 6
 
     #: Have a second model solve each question from its statement alone and
