@@ -311,3 +311,42 @@ class TestTheResultCannotBeCorrupted:
         assert probed.ok
         assert probed.payload is not None
         assert probed.payload["title"] == "Steady Tide Windows"
+
+
+class TestTheGatesBruteForceCheckIsNotVacuous:
+    """The gate runs brute_force_py and calls the question's function name in
+    it. Handed the module unchanged it called `solution` -- comparing the
+    reference against itself and agreeing every time.
+
+    A check that cannot fail is worse than no check, because it reads as
+    evidence that something was verified.
+    """
+
+    def test_the_function_name_is_bound_to_the_slow_implementation(self) -> None:
+        from freetcoder.generate.module import _brute_force_module
+
+        built = _brute_force_module("def solution(x):\n    return x\n", "solution")
+        assert built.rstrip().endswith("solution = brute_force")
+
+    def test_the_gate_now_catches_a_disagreeing_brute_force(self) -> None:
+        """Bypass the probe and hand the gate what it would have received."""
+        import asyncio
+
+        from freetcoder.formats import resolve
+        from freetcoder.generate.gate import validate_question
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty, GateOutcome
+
+        result = asyncio.run(generate_module(
+            FakeLLM([GOOD]), resolve("leetcode"),
+            difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+        ))
+        assert result.question is not None
+        q = result.question
+        # Same module, but its brute force now returns something else.
+        q.brute_force_py = q.signatures[0].reference_solution.replace(
+            "def brute_force(levels: list[int], drift: int) -> int:",
+            "def brute_force(levels: list[int], drift: int) -> int:\n    return -99",
+        ) + "\nsolution = brute_force\n"
+        assert validate_question(q).outcome is GateOutcome.BRUTE_FORCE_DISAGREES

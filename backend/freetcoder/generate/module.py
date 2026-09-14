@@ -320,9 +320,28 @@ async def generate_module(
         ],
         visible_tests=visible,
         hidden_generator_py=_replay_generator(cases),
-        brute_force_py=result.source,
+        brute_force_py=_brute_force_module(result.source, function_name),
     )
     return result
+
+
+def _brute_force_module(source: str, function_name: str) -> str:
+    """The module again, with the question's function name bound to the slow one.
+
+    The gate runs `brute_force_py` and calls `sig.function_name` inside it.
+    Handing it the module unchanged meant it called `solution` -- comparing the
+    reference against itself and agreeing every time. A check that cannot fail
+    is worse than no check, because it reads as evidence.
+
+    The probe already compares the two internally; this makes the gate's own
+    check mean what it says.
+    """
+    return (
+        f"{source}\n\n"
+        f"# The gate calls the question's function name here; point it at the\n"
+        f"# slow implementation, which is the whole purpose of this module.\n"
+        f"{function_name} = brute_force\n"
+    )
 
 
 def _replay_generator(cases: list[object]) -> str:
