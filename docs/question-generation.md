@@ -742,3 +742,28 @@ output cap, a literal that should have been a string — every one of these
 presented as "the model produced something unusable" and every one was ours.
 A bench that reports only an outcome name will keep attributing our bugs to
 the model, which is an expensive way to be wrong.
+
+## Which models we measure against
+
+`deepseek/deepseek-chat`, `z-ai/glm-4.6`, `moonshotai/kimi-k2.5` and
+`deepseek/deepseek-v4.1-flash` have all been used. Two of those are no longer
+worth a slot:
+
+**`deepseek-chat` is dropped.** It is not a coding model, and the runs say so:
+in the last clean measurement its only non-rate-limited attempt produced a
+`solution` and a `brute_force` that disagreed on a one-element input, which is
+the gate doing its job on a model that cannot hold two implementations of the
+same function in agreement. It is also the model most often rate-limited on
+OpenRouter's shared pool — two of three attempts returned HTTP 429 — so a run
+against it measures the pool rather than the strategy. Use
+`deepseek/deepseek-v4.1-flash` when a DeepSeek data point is wanted.
+
+The three worth keeping are **glm-4.6**, **kimi-k2.5** and
+**deepseek-v4.1-flash**. They differ enough to be a real agnosticism test:
+glm and kimi are both slow and verbose, flash is the one that emitted real
+newlines inside JSON when the others did not.
+
+**Rate limiting is a measurement hazard, not a result.** A 429 arrives as
+"the model did not answer", which scores identically to a model that answered
+badly. When a run shows an unexpected collapse, read the log before believing
+the table.
