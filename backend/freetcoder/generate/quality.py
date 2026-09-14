@@ -15,7 +15,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from ..models import GeneratedQuestion
+from ..models import GeneratedQuestion, TestCase
 
 #: Canonical examples from widely-published problems. Matching one is strong
 #: evidence the model recalled rather than authored: inventing [2,7,11,15] with
@@ -92,6 +92,11 @@ class QualityReport:
     #: How many languages the candidate can actually attempt this in. A
     #: question offering fewer than its format promises is unservable.
     language_count: int = 0
+    #: The statement itself, so a flagged question can actually be read. The
+    #: bench recorded that one question scored `thin` and nothing else; with no
+    #: text to look at, "is it really thin or is the metric wrong?" could only
+    #: be answered by reasoning about the matcher. It was the matcher.
+    statement_md: str = ""
     #: Matched a published problem's canonical example inputs, or its title.
     recalled_example: str = ""
     recalled_title: str = ""
@@ -130,6 +135,55 @@ class QualityReport:
         )
 
 
+def _scalars(value: object) -> list[str]:
+    """Every leaf of a value, as the token a statement would write."""
+    if isinstance(value, dict):
+        return [t for v in value.values() for t in _scalars(v)]
+    if isinstance(value, list | tuple):
+        return [t for v in value for t in _scalars(v)]
+    if isinstance(value, bool):
+        return [str(value).lower()]
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [json.dumps(value)]
+
+
+def _is_rendered(case: TestCase, body: str) -> bool:
+    """Does the prose actually show this example's numbers?
+
+    Matched leaf by leaf and in order, not as a literal substring of
+    `json.dumps`. The substring version demanded the exact rendering
+    `[4, 6, 5, 9]` -- spaces after the commas included -- so a statement
+    writing `[4,6,5,9]`, laying the example out in a table, or merely wrapping
+    the line scored as though it showed nothing. Measured on four
+    well-formed statements, three failed. A metric that punishes formatting
+    is not measuring prose.
+    """
+    shown = 0
+    wanted = 0
+    for value in case.args.values():
+        tokens = _scalars(value)
+        if not tokens:
+            continue
+        wanted += 1
+        at = 0
+        for token in tokens:
+            # Word boundaries so 4 does not match inside 42, and a search from
+            # `at` so the prose must show them in the order they occur.
+            found = re.search(
+                rf"(?<![\w.-]){re.escape(token.lower())}(?![\w.])", body[at:]
+            )
+            if found is None:
+                break
+            at += found.end()
+        else:
+            shown += 1
+    # Every argument, not just one of them. A lone scalar matching some stray
+    # digit elsewhere in the prose passed an example that showed nothing of
+    # the sort, which is the failure the old length guard was reaching for.
+    return wanted > 0 and shown == wanted
+
+
 EDGE_WORDS = (
     "empty", "no such", "none exist", "zero", "single", "duplicate",
     "negative", "tie", "if there is no", "when no", "at most one",
@@ -143,18 +197,11 @@ def score_question(
     body = q.statement_md.lower()
     params = parameter_names(q)
 
-    rendered = 0
-    for case in q.visible_tests:
-        # An example counts as shown when one of its argument values appears in
-        # the prose -- the data alone is not the statement.
-        for value in case.args.values():
-            token = json.dumps(value).strip('"')
-            if len(token) >= 3 and token.lower() in body:
-                rendered += 1
-                break
+    rendered = sum(1 for case in q.visible_tests if _is_rendered(case, body))
 
     report = QualityReport(
         title=q.title,
+        statement_md=q.statement_md,
         names_all_parameters=bool(params) and all(p.lower() in body for p in params),
         shows_examples=rendered >= max(1, len(q.visible_tests) - 1),
         addresses_edge_cases=any(w in body for w in EDGE_WORDS),
