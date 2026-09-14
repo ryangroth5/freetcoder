@@ -23,11 +23,12 @@ language, a scaffold for each, the hidden-case generator, a brute force, the
 constraints. The result is executed and validated exactly like any other
 question, so it has to actually run.
 
-Record every judgement call in `import_notes` — one short paragraph, in plain
-language, of the form "you did not say X, so I assumed Y". The candidate will
-read it. Being told "ties break toward the earliest word" up front is the
-difference between an informed answer and a baffling failure.
+Record every judgement call as a clarification — the question their text left
+open, your answer, and a `probe` showing it. Being told "ties break toward the
+earliest word" up front is the difference between an informed answer and a
+baffling failure, and a probe makes it a checked fact rather than a promise:
+yours is run against your own solution before the question is accepted.
 
 If the text is too vague to make a well-defined problem at all, do not refuse:
-choose the most natural reading, build the question, and say clearly in
-`import_notes` what you had to invent.
+choose the most natural reading, build the question, and make each thing you
+had to invent one of those clarifications.

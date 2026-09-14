@@ -50,6 +50,10 @@ export interface Question {
   source: string
   /** What the model assumed while adapting supplied text. Empty otherwise. */
   import_notes: string
+  /** Ambiguities the statement leaves open, each answered. Every one was
+   *  verified by running its probe against the reference before the question
+   *  was accepted. */
+  clarifications: { question: string; answer: string }[]
   /** Languages this format offers, in preset order. */
   languages: Language[]
   signatures: Signature[]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from typing import Literal
 
 from ..settings import Settings, get_settings
@@ -61,19 +63,19 @@ def build_client(settings: Settings | None = None) -> LLMClient:
 
         from .fake import FIXTURE_DIR
 
-        payload = json.loads((FIXTURE_DIR / "two_sum_good.json").read_text())
+        # Whichever artifact the active strategy actually asks for. The module
+        # path calls `complete_text` and lints, type-checks and imports the
+        # reply; handing it `str(dict)` produced a demo that silently generated
+        # nothing and a browser suite that could not cover the shipped path.
+        if s.generation_strategy == "module":
+            return FakeLLM(
+                text_for=_recorded_module(),
+                chat_reply=_OFFLINE_CHAT,
+            )
+        recorded = json.loads((FIXTURE_DIR / "two_sum_good.json").read_text())
         # Cycles: offline mode must not run dry part-way through a session.
         # The canned chat reply keeps the tutor demonstrable without a key.
-        return FakeLLM(
-            [payload],
-            cycle=True,
-            chat_reply=(
-                "Offline mode is on, so this is a canned reply rather than a "
-                "real tutor. Start with what you have already tried, then read "
-                "the first failing case: the input and the expected answer "
-                "usually point straight at the gap."
-            ),
-        )
+        return FakeLLM([recorded], cycle=True, chat_reply=_OFFLINE_CHAT)
     if not s.configured:
         return FakeLLM()
     return OpenAICompatibleClient(
@@ -83,3 +85,38 @@ def build_client(settings: Settings | None = None) -> LLMClient:
         timeout_s=s.llm_timeout_s,
         max_retries=s.llm_max_retries,
     )
+
+
+_OFFLINE_CHAT = (
+    "Offline mode is on, so this is a canned reply rather than a real tutor. "
+    "Start with what you have already tried, then read the first failing case: "
+    "the input and the expected answer usually point straight at the gap."
+)
+
+
+def _recorded_module() -> Callable[[str, str], str]:
+    """Answer the module strategy's calls from recorded files.
+
+    It makes several calls of different kinds per question -- the module, then
+    one translation per extra language -- so a queue's position stops meaning
+    anything. Match on the request instead.
+
+    The sufficiency check is deliberately not answered: it asks through
+    `complete_json`, finds nothing queued, and is skipped as inconclusive.
+    Offline mode has no second model, and pretending otherwise would be a
+    check that always passes.
+    """
+    from .fake import FIXTURE_DIR
+
+    module_source = (FIXTURE_DIR / "two_sum_good.py").read_text()
+    translations: dict[str, str] = json.loads(
+        (FIXTURE_DIR / "two_sum_translations.json").read_text()
+    )
+
+    def reply(system: str, user: str) -> str:
+        for language, text in translations.items():
+            if f"into {language}" in user:
+                return text
+        return module_source
+
+    return reply

@@ -1,0 +1,4 @@
+{
+  "javascript": "=== SCAFFOLD ===\nfunction two_sum(nums, target) {\n  return [];\n}\n=== SOLUTION ===\nfunction two_sum(nums, target) {\n  const seen = new Map();\n  for (let i = 0; i < nums.length; i++) {\n    if (seen.has(target - nums[i])) return [seen.get(target - nums[i]), i];\n    seen.set(nums[i], i);\n  }\n  return [];\n}\n",
+  "typescript": "=== SCAFFOLD ===\nfunction two_sum(nums: number[], target: number): number[] {\n  return [];\n}\n=== SOLUTION ===\nfunction two_sum(nums: number[], target: number): number[] {\n  const seen = new Map<number, number>();\n  for (let i = 0; i < nums.length; i++) {\n    const need = target - nums[i];\n    if (seen.has(need)) return [seen.get(need) as number, i];\n    seen.set(nums[i], i);\n  }\n  return [];\n}\n"
+}

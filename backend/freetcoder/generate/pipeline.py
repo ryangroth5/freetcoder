@@ -58,6 +58,14 @@ def build_user_prompt(
         # or a Codility question -- the source text supplies the problem, not
         # the format.
         parts.append(f"\n{_read_prompt('import')}")
+        # `import.md` is shared with the module strategy, which records these
+        # as clarifications with an executable probe. This path has no probe to
+        # run, so it gets the free-text field instead -- named here, where the
+        # field actually exists, rather than in the shared prompt.
+        parts.append(
+            "\nRecord those judgement calls in `import_notes` as well: one "
+            "short paragraph of the form \"you did not say X, so I assumed Y\"."
+        )
         parts.append(
             "\n### The candidate's text\n\n"
             "```\n" + gen.import_text + "\n```"

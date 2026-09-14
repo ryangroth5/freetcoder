@@ -485,6 +485,15 @@ async def get_question(request: Request, sid: str, index: int) -> dict[str, Any]
         "hidden_test_count": len(gated.hidden_tests),
         "source": gated.source,
         "import_notes": q.import_notes,
+        # The answers to what the prose leaves open. Each one's `probe` was
+        # executed against the reference before the question was accepted, so
+        # these are checked facts rather than the model's assurances -- and the
+        # candidate is the person who needs them. They were reaching the tutor
+        # and nobody else.
+        "clarifications": [
+            {"question": c.question, "answer": c.answer}
+            for c in q.clarifications
+        ],
         "remaining_seconds": remaining_seconds(session, config),
     }
 

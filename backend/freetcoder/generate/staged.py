@@ -303,6 +303,16 @@ def _brief(config: FormatConfig, difficulty: Difficulty, scenario: str) -> str:
         )
     if gen.freeform.strip():
         parts.append(f"The candidate also asked for: {gen.freeform.strip()}")
+    if gen.source == "imported" and gen.import_text.strip():
+        # Supplied prose is the same input as a freeform request, with more
+        # words in it: the candidate saying what they want the problem to be.
+        # `import.md` carries the extra duty that comes with it -- decide what
+        # the prose leaves open rather than inheriting its ambiguity.
+        parts.append(
+            f"\n{_read_prompt('import')}\n\n"
+            "### The candidate's text\n\n```\n"
+            f"{gen.import_text.strip()}\n```"
+        )
     return "\n".join(parts)
 
 

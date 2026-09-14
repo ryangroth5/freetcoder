@@ -47,7 +47,15 @@ class FakeLLM:
         *,
         cycle: bool = False,
         chat_reply: str | None = None,
+        text_for: Callable[[str, str], str] | None = None,
     ) -> None:
+        #: Answer `complete_text` from the request rather than from queue
+        #: position. A queue assumes one reply per question; the module
+        #: strategy makes several calls of different kinds -- the module, then
+        #: a translation per extra language -- so position stops meaning
+        #: anything. Offline mode uses this; tests keep the queue, where
+        #: order is the thing being asserted.
+        self._text_for = text_for
         #: A canned tutor reply for offline mode. Tests leave it unset so a
         #: mis-queued payload still fails loudly rather than being papered over.
         self._chat_reply = chat_reply
@@ -110,6 +118,8 @@ class FakeLLM:
         self, *, system: str, user: str, temperature: float = 0.7
     ) -> str:
         self.calls.append((system, user))
+        if self._text_for is not None:
+            return self._text_for(system, user)
         if not self._queue and self._cycle and self._original:
             self._queue = list(self._original)
         if not self._queue:
@@ -214,6 +224,12 @@ class FakeLLM:
 
     @property
     def exhausted(self) -> bool:
+        # A fake that answers from the request has nothing to run out of.
+        # Without this, offline mode on the module strategy looked to
+        # `service._can_generate` exactly like "no LLM configured", and every
+        # session silently fell through to an empty cache.
+        if self._text_for is not None:
+            return False
         return not self._queue and not self._cycle
 
 

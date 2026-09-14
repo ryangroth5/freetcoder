@@ -93,6 +93,28 @@ export function StatementPane({ question, referenceSolution }: {
               <Markdown>{question.statement_md}</Markdown>
             </div>
 
+            {question.clarifications?.length > 0 && (
+              // The questions a careful candidate would ask before writing
+              // anything, answered up front. Each answer was checked by running
+              // its probe against the reference, so these are not the model's
+              // assurances -- they are what the grader will actually do.
+              <div className="mt-4 rounded border border-[var(--color-edge)]
+                              bg-[var(--color-panel)] p-3 text-sm">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide
+                                text-[var(--color-muted)]">
+                  Answered for you
+                </div>
+                <dl className="space-y-2">
+                  {question.clarifications.map((c, i) => (
+                    <div key={i}>
+                      <dt className="font-medium">{c.question}</dt>
+                      <dd className="text-[var(--color-muted)]">{c.answer}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
+
             {question.visible_tests.map((test, i) => (
               <div key={i} className="mt-4">
                 <div className="font-semibold">Example {i + 1}:</div>

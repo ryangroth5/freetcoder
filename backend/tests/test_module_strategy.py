@@ -788,3 +788,102 @@ class TestARejectedModuleIsRevisedNotRewritten:
         assert "# the old module" in asked
         assert "the gate said no" in asked
         assert "Fix exactly that" in asked
+
+
+class TestSuppliedProseGoesThroughTheSamePipeline:
+    """"Bring your own" is a longer brief, not a second strategy.
+
+    `describe` mode already folded into `_brief` as one line. Pasted prose is
+    the same input with more words in it, and forcing it down the monolithic
+    path put the strategy that measured zero acceptances on the main road for
+    anyone who pasted a problem.
+    """
+
+    def _imported(self, text: str):
+        from freetcoder.formats import resolve
+        from freetcoder.models import Language
+
+        cfg = resolve("leetcode", import_text=text)
+        cfg.environment.languages = [Language.PYTHON]
+        return cfg
+
+    def test_the_candidates_text_reaches_the_model(self) -> None:
+        import asyncio
+
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        llm = FakeLLM([GOOD])
+        cfg = self._imported("find the longest run of readings within a drift")
+        result = asyncio.run(generate_module(
+            llm, cfg, difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+        ))
+        assert result.question is not None, result.failed_stage
+        asked = llm.calls[0][1]
+        assert "longest run of readings within a drift" in asked
+        assert "The candidate's text" in asked
+        assert "Adapting a question the candidate supplied" in asked
+
+    def test_it_is_not_forced_onto_the_monolithic_path(self) -> None:
+        """The whole point: an imported question is a module like any other."""
+        import asyncio
+
+        from freetcoder.llm import FakeLLM
+        from freetcoder.service import obtain_question
+        from freetcoder.settings import get_settings
+        from freetcoder.storage import Storage
+
+        async def run():
+            store = Storage(None)
+            await store.connect()
+            try:
+                return await obtain_question(
+                    store, FakeLLM([GOOD]),
+                    self._imported("something about tides"), 0, max_attempts=1,
+                )
+            finally:
+                await store.close()
+
+        import os
+
+        os.environ["FREETCODER_GENERATION_STRATEGY"] = "module"
+        get_settings.cache_clear()
+        try:
+            got = asyncio.run(run())
+        finally:
+            os.environ["FREETCODER_GENERATION_STRATEGY"] = "monolithic"
+            get_settings.cache_clear()
+
+        assert got is not None, "a pasted problem produced nothing"
+        assert got[1].question.title == "Steady Tide Windows"
+
+    def test_a_pasted_published_problem_is_still_caught(self) -> None:
+        """Pasting "two sum" is precisely how a published problem gets in, so
+        the recall check has to apply to imported questions too."""
+        from freetcoder.generate.quality import score_question
+        from freetcoder.models import (
+            Difficulty,
+            GeneratedQuestion,
+            Language,
+            Signature,
+            TestCase,
+        )
+
+        q = GeneratedQuestion(
+            title="Two Sum",
+            difficulty=Difficulty.EASY,
+            statement_md="Given `nums` and a `target`, return the two indices. " * 3,
+            constraints_md="- `2 <= len(nums)`",
+            signatures=[Signature(
+                language=Language.PYTHON, function_name="two_sum",
+                scaffold="def two_sum(nums, target):\n    pass\n",
+                reference_solution="def two_sum(nums, target):\n    return [0, 1]\n",
+            )],
+            visible_tests=[TestCase(args={"nums": [2, 7, 11, 15], "target": 9},
+                                    expected=[0, 1])],
+            hidden_generator_py="print()",
+        )
+        report = score_question(q)
+        assert report.looks_recalled
+        assert report.recalled_example == "two sum"

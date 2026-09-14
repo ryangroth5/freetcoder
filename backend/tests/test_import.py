@@ -225,3 +225,40 @@ class TestPublishingAnImportIsDeliberate:
                                  json={"style": "leetcode"})).json()["id"]
         resp = await client.post(f"/api/sessions/{sid}/questions/0/publish")
         assert resp.status_code != 409
+
+
+class TestSuppliedProseReachesTheModulePath:
+    """Pasting a problem no longer forces the strategy that measured zero.
+
+    `import.md` is shared by both paths, so it must not name a field that only
+    one of them has: the module path records judgement calls as clarifications
+    with an executable probe, the monolithic path as free text.
+    """
+
+    def test_the_brief_carries_the_guidance_and_the_text(self) -> None:
+        from freetcoder.formats import resolve
+        from freetcoder.generate.staged import _brief
+        from freetcoder.models import Difficulty
+
+        brief = _brief(
+            resolve("leetcode", import_text="a kennel log of arrivals"),
+            Difficulty.EASY,
+            "a dog kennel",
+        )
+        assert "a kennel log of arrivals" in brief
+        assert "Adapting a question the candidate supplied" in brief
+
+    def test_a_plain_generation_gets_none_of_it(self) -> None:
+        from freetcoder.formats import resolve
+        from freetcoder.generate.staged import _brief
+        from freetcoder.models import Difficulty
+
+        brief = _brief(resolve("leetcode"), Difficulty.EASY, "a dog kennel")
+        assert "Adapting a question" not in brief
+
+    def test_the_shared_prompt_names_no_strategy_specific_field(self) -> None:
+        from freetcoder.generate.pipeline import _read_prompt
+
+        assert "import_notes" not in _read_prompt("import"), (
+            "the module path has no such field; it uses clarifications"
+        )

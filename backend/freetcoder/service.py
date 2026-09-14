@@ -169,11 +169,7 @@ async def obtain_question(
 
     settings = get_settings()
     difficulty = config.session.difficulty_for(min(index, config.session.question_count - 1))
-    # Imported prose can only be adapted by the monolithic path, whatever the
-    # setting says: the module interface has no equivalent of `import_text`.
-    strategy = (
-        "monolithic" if config.generation.import_text else settings.generation_strategy
-    )
+    strategy = settings.generation_strategy
     key = cache_key(config, difficulty.value, language, strategy)
 
     if _can_generate(client):
