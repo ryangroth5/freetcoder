@@ -698,3 +698,47 @@ questions, and a fallback cache that might hand back either would make a
 change in generation quality unobservable. Keys from before that segment
 existed can never match again, so they are deleted on migration — except any
 question a session is still using.
+
+## Three bugs the cross-model bench found
+
+The first cross-model run of the module strategy scored deepseek-chat at
+**0 of 3**, which looked like a model-agnosticism problem. It was not. All
+three failures were ours.
+
+**A fence in the wrong language.** `extract_code` matched only ` ```python `,
+so a translation that came back fenced ` ```javascript ` kept its backticks,
+went to Node as source, and returned a `SyntaxError` attributed to the model's
+translation. That function exists *because* models fence code when asked for a
+bare file; it had simply never been applied to the translation path. The
+prompt asks for bare code in each section, and asking is not getting.
+
+**A generator that could not survive its own cases.** `_replay_generator`
+embedded the hidden cases as a Python *literal*, so the interpreter parsed
+27MB of source into millions of boxed integers before printing them straight
+back out as JSON. Forty cases of a hundred thousand elements died with
+`MemoryError` inside the generator's limits and surfaced as
+`generator_failed` — a question discarded for being exactly as large as a
+perf-discriminating format asked it to be. The cases are already JSON; they
+never needed to become objects. Two of the three deepseek failures were this.
+
+**Silent truncation, which was worse.** Fixing the memory problem exposed the
+output cap underneath it: forty cases of a thousand elements is 200KB against
+a 64KB default, and the run still reported `ok`. A question would have been
+served and graded on fourteen of the forty hidden tests it promised, with
+nothing anywhere saying so. Truncation that fails loudly is a bug; truncation
+that succeeds quietly is a wrong grade. Cases are now trimmed to a byte
+budget, but never below the number the question promised.
+
+The bench also printed `generator_failed` and nothing else, which is why two
+of these took a reproduction script to find rather than a glance at a log. It
+now carries the gate's own detail — the same blindness the stage errors were
+added to fix, left in place one layer up.
+
+### What that says about the problem space
+
+The pattern across all four days is unchanged and now has a third instance:
+**the model is rarely the thing that is broken.** Serialisation, a fence, an
+output cap, a literal that should have been a string — every one of these
+presented as "the model produced something unusable" and every one was ours.
+A bench that reports only an outcome name will keep attributing our bugs to
+the model, which is an expensive way to be wrong.
