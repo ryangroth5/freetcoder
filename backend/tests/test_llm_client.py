@@ -94,3 +94,53 @@ class TestRetriesStayConstrained:
         assert len(seen) == 2, "the first attempt should have been retried"
         kinds = [fmt.get("type") for fmt in seen]  # type: ignore[union-attr]
         assert kinds == ["json_schema", "json_schema"], kinds
+
+
+class TestAProviderThatNeverAnswers:
+    """The client's own `timeout` is not a deadline.
+
+    httpx applies a bare float per *operation* -- connect, read, write, pool --
+    so a provider that dribbles bytes keeps resetting the read timer and the
+    request never expires. Measured against a live OpenRouter call: eleven
+    minutes with a 300s timeout configured, the progress log frozen on the step
+    that started it and no way for the candidate to tell it was stuck.
+    """
+
+    async def test_a_hanging_call_is_cut_off(self) -> None:
+        import asyncio
+
+        from freetcoder.llm import LLMError
+        from freetcoder.llm.client import OpenAICompatibleClient
+
+        client = OpenAICompatibleClient(
+            base_url="http://unused", api_key="k", model="m",
+            timeout_s=0.05, max_retries=1,
+        )
+
+        async def never(**kwargs):
+            await asyncio.sleep(30)
+
+        client._client.chat.completions.create = never  # type: ignore[method-assign]
+
+        with pytest.raises(LLMError) as caught:
+            await client.complete_text(system="s", user="u")
+        assert "did not answer within" in str(caught.value)
+
+    async def test_the_deadline_does_not_fire_on_a_normal_call(self) -> None:
+        from types import SimpleNamespace
+
+        from freetcoder.llm.client import OpenAICompatibleClient
+
+        client = OpenAICompatibleClient(
+            base_url="http://unused", api_key="k", model="m",
+            timeout_s=5, max_retries=1,
+        )
+
+        async def answers(**kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="hello"))],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            )
+
+        client._client.chat.completions.create = answers  # type: ignore[method-assign]
+        assert await client.complete_text(system="s", user="u") == "hello"

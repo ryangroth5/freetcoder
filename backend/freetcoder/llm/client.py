@@ -8,6 +8,7 @@ good enough for step one, but a local Ollama build often is not.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -61,6 +62,25 @@ class OpenAICompatibleClient:
         )
         self._model = model
         self._max_retries = max_retries
+        #: A real wall-clock deadline, because the client's own `timeout` is
+        #: not one. httpx applies a bare float per *operation* -- connect,
+        #: read, write, pool -- so a provider that dribbles bytes keeps
+        #: resetting the read timer and the request never expires. Measured on
+        #: OpenRouter: a call sat for eleven minutes against a 300s timeout,
+        #: with the progress log frozen on the step that started it.
+        self._deadline_s = timeout_s
+
+    async def _ask(self, **kwargs: Any) -> Any:
+        """One provider call, bounded by the clock."""
+        try:
+            return await asyncio.wait_for(
+                self._client.chat.completions.create(**kwargs),
+                timeout=self._deadline_s,
+            )
+        except TimeoutError as exc:
+            raise LLMError(
+                f"the provider did not answer within {self._deadline_s:.0f}s"
+            ) from exc
 
     async def complete_json(
         self, *, system: str, user: str, schema: type[M], temperature: float = 0.7
@@ -121,7 +141,7 @@ class OpenAICompatibleClient:
         for _ in range(max(1, self._max_retries)):
             try:
                 with telemetry.record(self._model, "text") as entry:
-                    resp = await self._client.chat.completions.create(
+                    resp = await self._ask(
                         model=self._model,
                         temperature=temperature,
                         messages=[
@@ -186,7 +206,7 @@ class OpenAICompatibleClient:
                 "response_format": {"type": "json_object"},
             }
             try:
-                resp = await self._client.chat.completions.create(**kwargs)
+                resp = await self._ask(**kwargs)
             except APIError as exc:
                 log.info("provider refused tool calls (%s); continuing without", exc)
                 self.supports_tools = False
@@ -340,7 +360,7 @@ class OpenAICompatibleClient:
             "model": self._model, "temperature": temperature, "messages": convo,
         }
         try:
-            resp = await self._client.chat.completions.create(**kwargs)
+            resp = await self._ask(**kwargs)
             content = resp.choices[0].message.content or ""
             if content:
                 yield {"type": "token", "text": content}
@@ -372,7 +392,7 @@ class OpenAICompatibleClient:
 
         with telemetry.record(self._model, mode) as entry:
             try:
-                resp = await self._client.chat.completions.create(**kwargs)
+                resp = await self._ask(**kwargs)
             except APIError:
                 if mode != "json_schema":
                     raise
@@ -380,7 +400,7 @@ class OpenAICompatibleClient:
                 # unconstrained rather than burning the attempt.
                 kwargs["response_format"] = {"type": "json_object"}
                 entry.mode = "json_object"
-                resp = await self._client.chat.completions.create(**kwargs)
+                resp = await self._ask(**kwargs)
 
             usage = getattr(resp, "usage", None)
             if usage is not None:
