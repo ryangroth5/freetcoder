@@ -297,6 +297,10 @@ async def generate_module(
     asks.append(
         "Answer 2-4 real ambiguities in CLARIFICATIONS, each with a probe."
     )
+    if not gen.topics:
+        asks.append("Name the techniques the solution needs in TOPICS.")
+    else:
+        asks.append(f"Set TOPICS to: {', '.join(gen.topics)}.")
     joined = "\n".join(f"- {a}" for a in asks)
     base = (
         f"{_read_prompt(cfg.generation.style)}\n\n"
@@ -391,6 +395,12 @@ async def generate_module(
         for c in (raw_clar if isinstance(raw_clar, list) else [])
         if isinstance(c, dict) and c.get("question") and c.get("answer")
     ]
+    raw_topics = payload.get("topics")
+    model_topics = [
+        str(t).strip()
+        for t in (raw_topics if isinstance(raw_topics, list) else [])
+        if str(t).strip()
+    ][:8]
     hint = str(payload.get("hint") or "").strip()
     complexity = str(payload.get("complexity") or "").strip()
     raw_cases = payload.get("cases")
@@ -401,7 +411,11 @@ async def generate_module(
     result.question = GeneratedQuestion(
         title=str(payload.get("title") or "Untitled"),
         difficulty=difficulty,
-        topics=list(cfg.generation.topics),
+        # The candidate's chosen concentration wins; the model's labels fill in
+        # when they did not choose one. Without this every question generated
+        # without a concentration arrived with no topics at all -- the
+        # monolithic path let the model name them and this one dropped them.
+        topics=list(cfg.generation.topics) or model_topics,
         statement_md=str(payload.get("statement") or ""),
         constraints_md=str(payload.get("constraints") or ""),
         # `is_valid` replaces declared bounds, so the structured constraints

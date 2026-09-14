@@ -76,10 +76,15 @@ export async function expectEditorContains(page: Page, needle: string): Promise<
 }
 
 /** A token unique to each language's scaffold, used to wait for the swap. */
+// What each language's scaffold must contain for the editor to have finished
+// swapping. Deliberately the *function*, not an export convention: a generated
+// scaffold is written by the model and the JavaScript harness accepts a
+// script-style answer with no exports at all, so asserting on `module.exports`
+// was asserting the shape of one fixture rather than that the swap happened.
 const SCAFFOLD_MARKER: Record<string, string> = {
   python: 'def two_sum',
-  javascript: 'module.exports',
-  typescript: 'export function',
+  javascript: 'function two_sum(nums, target) {',
+  typescript: 'function two_sum(nums: number[], target: number)',
 }
 
 /**

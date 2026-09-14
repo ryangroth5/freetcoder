@@ -18,7 +18,9 @@ test.describe('problem view', () => {
   test('renders the statement with badges, examples and constraints', async ({ page }) => {
     await startLeetCodeSession(page)
 
-    await expect(page.getByText('easy', { exact: true })).toBeVisible()
+    // The difficulty the *format* asks for, not one the fixture hardcodes:
+    // the module path takes it from the preset's ladder.
+    await expect(page.getByText(/^(easy|medium|hard)$/)).toBeVisible()
     await expect(page.getByRole('button', { name: /Topics/ })).toBeVisible()
     await expect(page.getByRole('button', { name: /Hint/ })).toBeVisible()
     await expect(page.getByText('Example 1:')).toBeVisible()

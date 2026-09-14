@@ -36,6 +36,12 @@ STATEMENT: str = ""
 #: human half of `is_valid`; the two must agree.
 CONSTRAINTS: str = ""
 
+#: The techniques this question exercises, two or three of them, lower case:
+#: ["arrays", "hash maps"]. They label the question in the UI and tell a
+#: candidate what they are practising. Name what the *solution* needs, not the
+#: story it is dressed in -- "sliding window", not "ferries".
+TOPICS: list[str] = []
+
 #: Markdown. One nudge toward the approach, not the approach itself: name the
 #: idea ("a sliding window keeps this linear"), never the code. Leave it ""
 #: unless the brief asks for a hint.

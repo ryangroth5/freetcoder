@@ -191,6 +191,7 @@ emit({
     "parameters": params,
     "examples": worked,
     "cases": clean[:40],
+    "topics": [str(t) for t in (getattr(mod, "TOPICS", []) or [])][:8],
     "hint": str(getattr(mod, "HINT", "") or ""),
     "complexity": str(getattr(mod, "COMPLEXITY", "") or ""),
     "clarifications": clarified,

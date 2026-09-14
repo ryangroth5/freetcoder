@@ -141,11 +141,32 @@ test.describe('generation progress', () => {
     // A truthful log rather than a spinner.
     await expect(page.getByText('Building your question'))
       .toBeVisible({ timeout: 30_000 })
-    await expect(page.getByText(/asking the model|reusing a question/))
-      .toBeVisible({ timeout: 30_000 })
+    // The module strategy's own vocabulary: it says which question, which
+    // attempt, and which critic is running.
+    // `.first()`: the log names several steps at once, and any of them is
+    // proof it is a log rather than a spinner.
+    await expect(page.getByText(/writing question|reusing a question|checking it with/)
+      .first()).toBeVisible({ timeout: 30_000 })
   })
 
-  test('the elapsed time advances', async ({ page }) => {
+  test('the elapsed time advances while the run is in flight', async ({ page }) => {
+    // Hold the progress endpoint at `finished: false`. The clock deliberately
+    // stops once a run completes -- it is a stopwatch, not a counter that runs
+    // forever -- and offline generation finishes in about a second, so the
+    // only way to watch it advance is to keep the run open.
+    await page.route('**/api/progress/*', async (route) => {
+      await route.fulfill({
+        json: {
+          id: 'held',
+          started_at: 0,
+          steps: [{ at: 0, kind: 'info', message: 'writing question 1 — first try' }],
+          finished: false,
+          cancelled: false,
+          outcome: '',
+          elapsed: 3.0,
+        },
+      })
+    })
     await gotoPicker(page)
     await withSlowGeneration(page)
     await page.getByRole('button', { name: 'LeetCode' }).click()
@@ -153,7 +174,13 @@ test.describe('generation progress', () => {
 
     await expect(page.getByText('Building your question'))
       .toBeVisible({ timeout: 30_000 })
-    await expect(page.getByText(/^[2-9]\d*s$/)).toBeVisible({ timeout: 20_000 })
+
+    const clock = page.getByText(/^\d+\.\ds$/).first()
+    await expect(clock).toBeVisible({ timeout: 20_000 })
+    const first = await clock.textContent()
+    await expect
+      .poll(async () => await clock.textContent(), { timeout: 10_000 })
+      .not.toBe(first)
   })
 
   test('cancel is honest about what it can interrupt', async ({ page }) => {

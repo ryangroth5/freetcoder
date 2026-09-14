@@ -37,10 +37,16 @@ test.describe('settings', () => {
   test('the suite no longer reconfigures the backend', async ({ page, request }) => {
     // The regression guard for the bug that started this: a browser run used
     // to POST a key to the real server and leave it configured for good.
+    // Compare before and after rather than asserting "unconfigured": a
+    // developer with a key in .env has a legitimately configured server, and
+    // the bug being guarded was the suite *changing* that, not its value.
+    const before = await (await request.get('/api/setup')).json()
     await gotoPicker(page)
-    const state = await (await request.get('/api/setup')).json()
-    expect(state.configured, 'gotoPicker must not write to the backend')
-      .toBe(false)
+    const after = await (await request.get('/api/setup')).json()
+    expect(after.configured, 'gotoPicker must not write to the backend')
+      .toBe(before.configured)
+    expect(after.key_hint, 'gotoPicker must not replace the key')
+      .toBe(before.key_hint)
   })
 
   test('reachable from the picker, and Done goes back', async ({ page }) => {

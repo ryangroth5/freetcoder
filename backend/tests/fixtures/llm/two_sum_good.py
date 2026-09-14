@@ -30,7 +30,12 @@ CONSTRAINTS = """
 - exactly one valid answer exists
 """
 
-HINT = "A value you have already seen tells you what you still need."
+TOPICS = ["arrays", "hash maps"]
+
+# Deliberately word-for-word with the JSON fixture's `hint_md`: the browser
+# suite asserts on this copy, and a test that changes meaning when the fixture
+# is swapped is testing the fixture rather than the UI.
+HINT = "What have you already seen? A dictionary answers that in O(1)."
 
 COMPLEXITY = ""
 

@@ -887,3 +887,45 @@ class TestSuppliedProseGoesThroughTheSamePipeline:
         report = score_question(q)
         assert report.looks_recalled
         assert report.recalled_example == "two sum"
+
+
+class TestTopicsSurviveTheModulePath:
+    """The monolithic path let the model name the techniques; this one dropped
+    them, so every question generated without a chosen concentration arrived
+    unlabelled."""
+
+    def _run(self, source: str, topics: list[str] | None = None):
+        import asyncio
+
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        cfg = python_only()
+        cfg.generation.topics = list(topics or [])
+        return asyncio.run(generate_module(
+            FakeLLM([source]), cfg, difficulty=Difficulty.MEDIUM,
+            tries_per_stage=1,
+        ))
+
+    def test_the_model_names_them_when_nobody_else_did(self) -> None:
+        source = GOOD.replace(
+            'EXAMPLES = [', 'TOPICS = ["sliding window", "arrays"]\n\nEXAMPLES = [', 1
+        )
+        result = self._run(source)
+        assert result.question is not None, result.failed_stage
+        assert result.question.topics == ["sliding window", "arrays"]
+
+    def test_the_candidates_concentration_wins(self) -> None:
+        """They asked for a subject; the model does not get to overrule it."""
+        source = GOOD.replace(
+            'EXAMPLES = [', 'TOPICS = ["something else"]\n\nEXAMPLES = [', 1
+        )
+        result = self._run(source, topics=["dynamic programming"])
+        assert result.question is not None, result.failed_stage
+        assert result.question.topics == ["dynamic programming"]
+
+    def test_a_module_naming_none_still_works(self) -> None:
+        result = self._run(GOOD)
+        assert result.question is not None, result.failed_stage
+        assert result.question.topics == []
