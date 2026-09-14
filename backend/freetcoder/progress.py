@@ -20,7 +20,7 @@ import time
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 log = logging.getLogger(__name__)
 
@@ -59,10 +59,21 @@ class Run(BaseModel):
     cancelled: bool = False
     #: "accepted" | "failed" | "cancelled", once finished.
     outcome: str = ""
+    #: Monotonic reading at `finish`. Only meaningful next to `started_at`.
+    ended_at: float | None = None
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def elapsed(self) -> float:
-        return time.monotonic() - self.started_at
+        """Seconds the run has taken, frozen once it finishes.
+
+        Serialised deliberately. `started_at` is a monotonic reading, which
+        means nothing to a browser, so the client cannot work this out for
+        itself -- and without it a reload mid-generation restarts the timer
+        from zero.
+        """
+        end = self.ended_at if self.ended_at is not None else time.monotonic()
+        return round(end - self.started_at, 2)
 
 
 class ProgressRegistry:
@@ -111,6 +122,7 @@ class ProgressRegistry:
                 return  # terminal: the first outcome is the real one
             run.finished = True
             run.outcome = outcome
+            run.ended_at = time.monotonic()
 
     def cancel(self, run_id: str) -> bool:
         """Ask a run to stop. False if it is unknown or already finished."""

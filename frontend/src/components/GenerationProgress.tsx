@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { ProgressRun, ProgressStep } from '../api'
 
 const POLL_MS = 900
+const TICK_MS = 100
 
 /**
  * What generation is actually doing.
@@ -20,9 +21,15 @@ export function GenerationProgress({ runId, onCancelled }: {
   onCancelled?: () => void
 }) {
   const [run, setRun] = useState<ProgressRun | null>(null)
-  const [elapsed, setElapsed] = useState(0)
   const [cancelling, setCancelling] = useState(false)
-  const started = useRef(Date.now())
+
+  // Elapsed is counted from the server's own reading, re-anchored on every
+  // poll. Counting from mount instead meant a reload mid-generation restarted
+  // the clock at zero, and drift accumulated over a run measured in minutes.
+  const anchor = useRef({ elapsed: 0, at: Date.now() })
+  const [, tick] = useState(0)
+
+  const finished = run?.finished ?? false
 
   useEffect(() => {
     let live = true
@@ -30,7 +37,9 @@ export function GenerationProgress({ runId, onCancelled }: {
     const read = async () => {
       try {
         const next = await api.progress(runId)
-        if (live) setRun(next)
+        if (!live) return
+        anchor.current = { elapsed: next.elapsed, at: Date.now() }
+        setRun(next)
       } catch {
         // A 404 just means the run has not been registered yet.
       }
@@ -39,17 +48,17 @@ export function GenerationProgress({ runId, onCancelled }: {
     // Read once immediately: waiting a full interval means a fast generation
     // finishes before anything is ever shown, so the panel flashes empty.
     void read()
+    if (finished) return () => { live = false }
+
     const poll = window.setInterval(read, POLL_MS)
-    const tick = window.setInterval(
-      () => live && setElapsed(Math.floor((Date.now() - started.current) / 1000)),
-      1000,
-    )
+    // Fast enough to read as a running stopwatch rather than a stuck number.
+    const clock = window.setInterval(() => live && tick(n => n + 1), TICK_MS)
     return () => {
       live = false
       window.clearInterval(poll)
-      window.clearInterval(tick)
+      window.clearInterval(clock)
     }
-  }, [runId])
+  }, [runId, finished])
 
   async function cancel() {
     setCancelling(true)
@@ -58,6 +67,9 @@ export function GenerationProgress({ runId, onCancelled }: {
   }
 
   const steps = run?.steps ?? []
+  const elapsed = finished
+    ? (run?.elapsed ?? 0)
+    : anchor.current.elapsed + (Date.now() - anchor.current.at) / 1000
 
   return (
     <div className="mt-4 rounded border border-[var(--color-edge)]
@@ -67,11 +79,11 @@ export function GenerationProgress({ runId, onCancelled }: {
           {cancelling ? 'Cancelling…' : 'Building your question'}
         </span>
         <span className="font-mono text-xs tabular-nums text-[var(--color-muted)]">
-          {elapsed}s
+          {elapsed.toFixed(1)}s
         </span>
         <button
           onClick={cancel}
-          disabled={cancelling}
+          disabled={cancelling || finished}
           className="ml-auto rounded border border-[var(--color-edge)] px-2 py-0.5
                      text-xs text-[var(--color-muted)]
                      hover:text-[var(--color-ink)] disabled:opacity-40"
@@ -92,9 +104,22 @@ export function GenerationProgress({ runId, onCancelled }: {
         <p className="text-xs text-[var(--color-muted)]">Starting…</p>
       ) : (
         <ol className="space-y-1">
-          {steps.map((step, i) => (
-            <StepRow key={i} step={step} latest={i === steps.length - 1} />
-          ))}
+          {steps.map((step, i) => {
+            const last = i === steps.length - 1
+            // `at` is when a step *started*, so its duration is the gap to the
+            // next one. The last step has no next one -- it is still running,
+            // unless the run is over.
+            const until = last ? elapsed : steps[i + 1].at
+            return (
+              <StepRow
+                key={i}
+                step={step}
+                latest={last}
+                took={Math.max(0, until - step.at)}
+                running={last && !finished}
+              />
+            )
+          })}
         </ol>
       )}
 
@@ -119,16 +144,26 @@ const TONE: Record<ProgressStep['kind'], string> = {
   fail: 'text-[var(--color-fail)]',
 }
 
-function StepRow({ step, latest }: { step: ProgressStep; latest: boolean }) {
+function StepRow({ step, latest, took, running }: {
+  step: ProgressStep
+  latest: boolean
+  took: number
+  running: boolean
+}) {
   return (
     <li className="flex gap-2 text-xs">
-      <span className={`w-3 shrink-0 ${TONE[step.kind]}`}>{ICON[step.kind]}</span>
+      <span className={`w-3 shrink-0 ${TONE[step.kind]}`}>
+        {running ? '·' : ICON[step.kind]}
+      </span>
       <span className={latest ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)]'}>
         {step.message}
       </span>
-      <span className="ml-auto shrink-0 font-mono tabular-nums
-                       text-[var(--color-muted)]">
-        {step.at.toFixed(1)}s
+      <span
+        className="ml-auto shrink-0 font-mono tabular-nums
+                   text-[var(--color-muted)]"
+        title={`started at ${step.at.toFixed(1)}s`}
+      >
+        {took.toFixed(1)}s{running ? '…' : ''}
       </span>
     </li>
   )

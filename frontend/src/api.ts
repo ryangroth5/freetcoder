@@ -221,6 +221,10 @@ export interface ProgressRun {
   finished: boolean
   cancelled: boolean
   outcome: string
+  /** Seconds the run has taken, frozen once finished. Server-side, so it
+   *  survives a reload -- `started_at` is a monotonic reading and is useless
+   *  to us on its own. */
+  elapsed: number
 }
 
 export interface ChatMessage {
