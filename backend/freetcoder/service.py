@@ -182,6 +182,7 @@ async def obtain_question(
                 client, config, difficulty=difficulty, language=language,
                 max_attempts=max_attempts,
                 question_number=index + 1,
+                check_sufficiency=settings.check_statement_sufficiency,
                 report_to=report_to,
             )
         else:

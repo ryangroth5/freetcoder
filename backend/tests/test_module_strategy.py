@@ -696,3 +696,76 @@ class TestTheHiddenCasesAreNotSilentlyTruncated:
 
         small = [{"n": i} for i in range(40)]
         assert len(trim_cases(small, keep_at_least=12)) == 40
+
+
+class TestTheStatementIsCheckedOnThisPathToo:
+    """The gate never reads the statement.
+
+    Making `module` the default without this silently switched off the only
+    check that validates what the candidate actually reads -- while the
+    setting kept saying it was on, which is worse than it being off.
+    """
+
+    def _solver(self, code: str):
+        from freetcoder.generate.sufficiency import CandidateSolution
+
+        return CandidateSolution(code=code, assumptions="")
+
+    def test_a_solvable_statement_is_accepted(self) -> None:
+        import asyncio
+
+        from freetcoder.generate.module import generate_question_as_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        # The module, then the second model solving it from the prose alone.
+        solver = self._solver(
+            "def solution(levels, drift):\n"
+            "    best = 0\n"
+            "    for i in range(len(levels)):\n"
+            "        lo = hi = levels[i]\n"
+            "        for j in range(i, len(levels)):\n"
+            "            lo = min(lo, levels[j]); hi = max(hi, levels[j])\n"
+            "            if hi - lo <= drift: best = max(best, j - i + 1)\n"
+            "    return best\n"
+        )
+        result = asyncio.run(generate_question_as_module(
+            FakeLLM([GOOD, solver]), python_only(),
+            difficulty=Difficulty.MEDIUM, max_attempts=1, check_sufficiency=True,
+        ))
+        assert result.question is not None, [a.detail for a in result.attempts]
+
+    def test_a_statement_nobody_can_solve_is_rejected(self) -> None:
+        """A second model disagreeing does not prove ambiguity, but it is the
+        only signal we have about the prose, and it must reach the verdict."""
+        import asyncio
+
+        from freetcoder.generate.module import generate_question_as_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        wrong = self._solver("def solution(levels, drift):\n    return 0\n")
+        result = asyncio.run(generate_question_as_module(
+            FakeLLM([GOOD, wrong]), python_only(),
+            difficulty=Difficulty.MEDIUM, max_attempts=1, check_sufficiency=True,
+        ))
+        assert result.question is None, "an unsolvable statement was served"
+        assert result.attempts, "the rejection must be recorded"
+        assert any("specified" in a.detail or a.outcome.value != "accepted"
+                   for a in result.attempts)
+
+    def test_it_can_be_turned_off(self) -> None:
+        """One LLM call, not two: the check is the expensive half."""
+        import asyncio
+
+        from freetcoder.generate.module import generate_question_as_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        llm = FakeLLM([GOOD])
+        result = asyncio.run(generate_question_as_module(
+            llm, python_only(),
+            difficulty=Difficulty.MEDIUM, max_attempts=1, check_sufficiency=False,
+        ))
+        assert result.question is not None
+        assert len(llm.calls) == 1

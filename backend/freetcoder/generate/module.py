@@ -41,6 +41,7 @@ from .module_probe import PROBE
 from .pipeline import GenerationAttempt, GenerationResult, _gated, _read_prompt
 from .scenarios import pick
 from .staged import StagedResult, StageOutcome, _brief, reference_fault
+from .sufficiency import check_statement_sufficiency
 
 INTERFACE = Path(__file__).parent / "interface" / "question_interface.py"
 
@@ -586,6 +587,7 @@ async def generate_question_as_module(
     language: Language = Language.PYTHON,
     max_attempts: int = 4,
     question_number: int = 1,
+    check_sufficiency: bool = True,
     report_to: Reporter = NULL_REPORTER,
 ) -> GenerationResult:
     """`generate_module`, gated and packaged like the monolithic path.
@@ -626,9 +628,30 @@ async def generate_question_as_module(
             title=staged.question.title,
         ))
         if report.outcome is GateOutcome.ACCEPTED:
-            report_to("the question passed every check", kind="ok")
-            result.question = _gated(staged.question, report, language, config)
-            return result
+            # The gate proves the question is internally sound. It never reads
+            # the statement, so this is where we find out whether a candidate
+            # could derive the answer from what they are actually given. It is
+            # strategy-agnostic -- it takes a question, not a draft -- and
+            # leaving it out of this path turned a setting that says it is on
+            # into one that silently is not.
+            gap = (
+                await check_statement_sufficiency(
+                    client, staged.question, report.hidden_cases,
+                    language=language, report_to=report_to,
+                )
+                if check_sufficiency
+                else None
+            )
+            if gap is None:
+                report_to("the question passed every check", kind="ok")
+                result.question = _gated(staged.question, report, language, config)
+                return result
+            result.attempts.append(GenerationAttempt(
+                outcome=gap.outcome,
+                detail=gap.detail[:300],
+                title=staged.question.title,
+            ))
+            report = gap
 
         report_to(f"rejected: {report.detail}"[:300], kind="warn")
         if attempt + 1 < max(1, max_attempts):
