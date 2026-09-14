@@ -135,6 +135,39 @@ if len(clean) < WANTED:
     fail("generate_cases",
          "generate_cases yielded %d case(s); at least %d are needed" % (len(clean), WANTED))
 
+# Clarifications: the model asserts the answer, we compute the evidence. Asking
+# it for `expect` would be asking it to guess at its own code.
+clarified = []
+for i, c in enumerate(list(getattr(mod, "CLARIFICATIONS", []) or [])[:8]):
+    if not isinstance(c, dict):
+        fail("clarifications", "CLARIFICATIONS[%d] is %s, expected a mapping"
+             % (i, type(c).__name__))
+    q_text, a_text = c.get("question"), c.get("answer")
+    if not isinstance(q_text, str) or not q_text.strip():
+        fail("clarifications", "CLARIFICATIONS[%d] needs a non-empty 'question'" % i)
+    if not isinstance(a_text, str) or not a_text.strip():
+        fail("clarifications", "CLARIFICATIONS[%d] needs a non-empty 'answer'" % i)
+    probe = c.get("probe")
+    if not isinstance(probe, dict):
+        fail("clarifications",
+             "CLARIFICATIONS[%d] needs a 'probe' mapping of arguments showing the answer" % i)
+    unknown = [k for k in probe if k not in params]
+    if unknown:
+        fail("clarifications", "CLARIFICATIONS[%d] probe has arguments solution does "
+             "not take: %s" % (i, ", ".join(unknown)))
+    try:
+        expect = mod.solution(**probe)
+    except Exception:
+        fail("clarifications", "CLARIFICATIONS[%d] probe %r raised:\\n%s"
+             % (i, probe, traceback.format_exc(limit=3)))
+    try:
+        json.dumps([probe, expect])
+    except Exception:
+        fail("clarifications", "CLARIFICATIONS[%d] probe or its result is not "
+             "JSON-serialisable" % i)
+    clarified.append({"question": q_text.strip()[:200], "answer": a_text.strip()[:400],
+                      "probe": probe, "expect": expect})
+
 # Brute force must agree on the smallest cases. Two implementations agreeing is
 # the only evidence either is right.
 by_size = sorted(clean, key=lambda c: len(json.dumps(c)))[:5]
@@ -158,5 +191,8 @@ emit({
     "parameters": params,
     "examples": worked,
     "cases": clean[:40],
+    "hint": str(getattr(mod, "HINT", "") or ""),
+    "complexity": str(getattr(mod, "COMPLEXITY", "") or ""),
+    "clarifications": clarified,
 })
 '''

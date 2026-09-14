@@ -350,3 +350,143 @@ class TestTheGatesBruteForceCheckIsNotVacuous:
             "def brute_force(levels: list[int], drift: int) -> int:\n    return -99",
         ) + "\nsolution = brute_force\n"
         assert validate_question(q).outcome is GateOutcome.BRUTE_FORCE_DISAGREES
+
+
+#: The same module, now carrying the three names a question needs beyond the
+#: core contract. They are declared unconditionally; whether we *ask* for them
+#: is what varies by format.
+RICH = GOOD.replace(
+    'EXAMPLES = [',
+    '''HINT = "Grow a window while the spread holds, then shrink from the left."
+
+COMPLEXITY = "O(n log n)"
+
+CLARIFICATIONS = [
+    {
+        "question": "What is returned for empty input?",
+        "answer": "0 -- there is no run to measure.",
+        "probe": {"levels": [], "drift": 3},
+    },
+    {
+        "question": "Does a single reading count as a run?",
+        "answer": "Yes, its spread is 0, so it always fits.",
+        "probe": {"levels": [7], "drift": 0},
+    },
+]
+
+EXAMPLES = [''',
+)
+
+
+class TestTheNamesBeyondTheCoreContract:
+    """HINT, COMPLEXITY and CLARIFICATIONS: asked for by format, verified by
+    execution, and dropped when the format did not want them."""
+
+    def test_the_probe_reports_all_three(self) -> None:
+        fault, payload = module_fault(RICH, wanted=12)
+        assert fault == "", fault
+        assert payload is not None
+        assert payload["complexity"] == "O(n log n)"
+        assert "window" in str(payload["hint"])
+        assert len(payload["clarifications"]) == 2  # type: ignore[arg-type]
+
+    def test_the_expected_value_is_computed_not_taken_from_the_model(self) -> None:
+        """A model asked for `expect` would be guessing at its own code.
+
+        The probe runs `solution` on the probe arguments instead, which is the
+        same reason hidden cases carry inputs only.
+        """
+        source = RICH.replace(
+            '"probe": {"levels": [], "drift": 3},',
+            '"probe": {"levels": [], "drift": 3}, "expect": 99,',
+        )
+        fault, payload = module_fault(source, wanted=12)
+        assert fault == "", fault
+        assert payload is not None
+        first = payload["clarifications"][0]  # type: ignore[index]
+        assert first["expect"] == 0, "the model's 99 must not survive"
+
+    def test_a_probe_the_solution_does_not_accept_is_rejected(self) -> None:
+        source = RICH.replace(
+            '"probe": {"levels": [7], "drift": 0},',
+            '"probe": {"readings": [7], "drift": 0},',
+        )
+        fault, _ = module_fault(source, wanted=12)
+        assert fault.startswith("clarifications:"), fault
+        assert "readings" in fault, "the model must be told which argument is wrong"
+
+    def test_a_clarification_without_an_answer_is_rejected(self) -> None:
+        source = RICH.replace(
+            '"answer": "0 -- there is no run to measure.",', '"answer": "",'
+        )
+        fault, _ = module_fault(source, wanted=12)
+        assert fault.startswith("clarifications:"), fault
+        assert "answer" in fault
+
+    def test_a_probe_that_raises_is_rejected(self) -> None:
+        source = RICH.replace(
+            '"probe": {"levels": [], "drift": 3},',
+            '"probe": {"levels": None, "drift": 3},',
+        )
+        fault, _ = module_fault(source, wanted=12)
+        assert fault.startswith("clarifications:"), fault
+
+    def test_the_format_decides_whether_a_hint_survives(self) -> None:
+        """The module always declares HINT. A format that gives no support must
+        not show one, so the drop happens here rather than being trusted to the
+        model's restraint."""
+        import asyncio
+
+        from freetcoder.formats import resolve
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        def build(*, hints: bool, perf: bool):
+            cfg = resolve("leetcode")
+            cfg.generation.give_hints = hints
+            cfg.scoring.perf_tests = perf
+            return asyncio.run(generate_module(
+                FakeLLM([RICH]), cfg,
+                difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+            ))
+
+        wanted = build(hints=True, perf=True)
+        assert wanted.question is not None, wanted.failed_stage
+        assert wanted.question.hint_md and "window" in wanted.question.hint_md
+        assert wanted.question.complexity_target == "O(n log n)"
+        assert len(wanted.question.clarifications) == 2
+
+        bare = build(hints=False, perf=False)
+        assert bare.question is not None, bare.failed_stage
+        assert bare.question.hint_md is None
+        assert bare.question.complexity_target is None
+
+    def test_the_prompt_says_which_names_are_wanted(self) -> None:
+        import asyncio
+
+        from freetcoder.formats import resolve
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        cfg = resolve("leetcode")
+        cfg.generation.give_hints = False
+        llm = FakeLLM([RICH])
+        asyncio.run(generate_module(
+            llm, cfg, difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+        ))
+        asked = llm.calls[0][1]
+        assert 'Leave HINT as ""' in asked
+        assert "CLARIFICATIONS" in asked
+
+
+class TestTheProbeSourceIsValidPython:
+    """The probe is a string built with escapes, so a stray `\\n` becomes a real
+    newline inside a string literal and the whole probe fails at import -- which
+    surfaces as every module being rejected, not as a broken probe."""
+
+    def test_it_compiles(self) -> None:
+        from freetcoder.generate.module_probe import PROBE
+
+        compile(PROBE, "<probe>", "exec")

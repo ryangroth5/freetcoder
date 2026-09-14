@@ -36,6 +36,30 @@ STATEMENT: str = ""
 #: human half of `is_valid`; the two must agree.
 CONSTRAINTS: str = ""
 
+#: Markdown. One nudge toward the approach, not the approach itself: name the
+#: idea ("a sliding window keeps this linear"), never the code. Leave it ""
+#: unless the brief asks for a hint.
+HINT: str = ""
+
+#: The intended time bound of `solution`, e.g. "O(n log n)" or "O(n)". Leave it
+#: "" unless the brief asks for one. When set it is measured: the reference is
+#: timed across growing inputs and a claim it does not meet rejects the
+#: question, so state what `solution` actually achieves rather than the best
+#: bound you know of.
+COMPLEXITY: str = ""
+
+#: The questions the statement leaves open, answered. Each is
+#: `{"question": "...", "answer": "...", "probe": {parameter_name: value}}`.
+#:
+#: `probe` is a small input that demonstrates the answer -- if the answer is
+#: "ties break toward the lower index", `probe` is an input containing a tie.
+#: It is run through `solution` and the result is shown alongside, so do not
+#: supply an expected value: you would only be guessing at your own code.
+#:
+#: Prefer the ambiguities a careful candidate would actually raise -- empty
+#: input, ties, duplicates, case sensitivity -- over restating CONSTRAINTS.
+CLARIFICATIONS: list[dict[str, Any]] = []
+
 
 # --------------------------------------------------------------------------
 # Code. Ordinary Python -- no escaping, no delimiters, no JSON.

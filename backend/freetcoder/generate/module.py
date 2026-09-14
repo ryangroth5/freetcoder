@@ -23,6 +23,7 @@ from pathlib import Path
 from ..formats import FormatConfig
 from ..llm import LLMClient, LLMError, telemetry
 from ..models import (
+    Clarification,
     Difficulty,
     GeneratedQuestion,
     Language,
@@ -184,14 +185,25 @@ def probe_module(source: str, *, wanted: int) -> ProbeResult:
     return ProbeResult(ok=False, step="probe", detail=detail[:600])
 
 
-def module_fault(source: str, *, wanted: int) -> tuple[str, dict[str, object] | None]:
-    """Every critic in order, cheapest first. Returns ("", payload) when good."""
-    for fault in (alarming_source(source), lint_fault(source)):
-        if fault:
-            return fault, None
+def module_fault(
+    source: str, *, wanted: int, report_to: Reporter = NULL_REPORTER
+) -> tuple[str, dict[str, object] | None]:
+    """Every critic in order, cheapest first. Returns ("", payload) when good.
+
+    Each critic announces itself. They are seconds apart at best and tens of
+    seconds apart at worst, and a log that says nothing between "writing the
+    question module" and the next attempt reads as a hang.
+    """
+    if fault := alarming_source(source):
+        return fault, None
+    report_to("checking it with ruff")
+    if fault := lint_fault(source):
+        return fault, None
+    report_to("checking types with pyright")
     if fault := typecheck_fault(source):
         return fault, None
 
+    report_to("running the module against its own cases")
     probed = probe_module(source, wanted=wanted)
     if not probed.ok:
         return f"{probed.step}: {probed.detail}", None
@@ -224,6 +236,7 @@ async def generate_module(
     difficulty: Difficulty | None = None,
     language: Language = Language.PYTHON,
     tries_per_stage: int = 3,
+    question_number: int = 1,
     scenario: str | None = None,
     rng: random.Random | None = None,
     report_to: Reporter = NULL_REPORTER,
@@ -237,11 +250,35 @@ async def generate_module(
     result.stages.append(outcome)
 
     wanted = cfg.scoring.hidden_test_count
+    gen = cfg.generation
+    # The interface declares HINT, COMPLEXITY and CLARIFICATIONS unconditionally
+    # so the contract the model reads never changes shape. What varies is
+    # whether we ask for them -- an unasked-for name stays "" and is dropped.
+    asks = [
+        f"Show {cfg.environment.visible_tests} worked example(s) in EXAMPLES.",
+        f"generate_cases must yield at least {wanted} cases.",
+    ]
+    wants_complexity = gen.state_complexity_target or cfg.scoring.perf_tests
+    if wants_complexity:
+        asks.append(
+            "Set COMPLEXITY to the bound `solution` actually achieves, and make "
+            "the generated cases large enough that a naive attempt cannot finish."
+        )
+    else:
+        asks.append("Leave COMPLEXITY as \"\".")
+    asks.append(
+        "Write a short HINT that nudges without giving the answer."
+        if gen.give_hints
+        else "Leave HINT as \"\"; this format gives the candidate no support."
+    )
+    asks.append(
+        "Answer 2-4 real ambiguities in CLARIFICATIONS, each with a probe."
+    )
+    joined = "\n".join(f"- {a}" for a in asks)
     base = (
         f"{_read_prompt(cfg.generation.style)}\n\n"
         f"{_brief(cfg, difficulty, chosen)}\n\n"
-        f"Show {cfg.environment.visible_tests} worked example(s) in EXAMPLES.\n"
-        f"generate_cases must yield at least {wanted} cases.\n\n"
+        f"{joined}\n\n"
         "The interface you are implementing:\n\n```python\n"
         f"{INTERFACE.read_text()}\n```"
     )
@@ -249,9 +286,14 @@ async def generate_module(
     payload: dict[str, object] | None = None
     last = ""
 
-    report_to("writing the question module")
-    for _ in range(tries_per_stage):
+    for attempt in range(1, tries_per_stage + 1):
         outcome.attempts += 1
+        report_to(
+            f"writing question {question_number} \u2014 first try"
+            if attempt == 1
+            else f"writing question {question_number} \u2014 attempt "
+                 f"{attempt} of {tries_per_stage}"
+        )
         try:
             with telemetry.stage("module"):
                 reply = await client.complete_text(
@@ -259,16 +301,23 @@ async def generate_module(
                 )
         except LLMError as exc:
             last = str(exc)[:200]
+            report_to(f"the model did not answer: {last[:80]}", kind="warn")
             continue
 
         source = extract_code(reply)
-        fault, payload = module_fault(source, wanted=wanted)
+        fault, payload = module_fault(source, wanted=wanted, report_to=report_to)
         if not fault:
             result.source = source
+            report_to("the question module passed every check", kind="ok")
             break
         last = fault
         payload = None
-        report_to(f"revising: {fault.splitlines()[0][:80]}", kind="warn")
+        report_to(
+            f"the module didn\u2019t hold up: {fault.splitlines()[0][:80]}",
+            kind="warn",
+        )
+        if attempt < tries_per_stage:
+            report_to("asking for a revision")
         ask = (
             f"{base}\n\n## Your previous module was rejected\n\n"
             f"```python\n{source}\n```\n\n"
@@ -298,6 +347,19 @@ async def generate_module(
             expected=ex.get("expected"),
             explanation=str(why) if isinstance(why, str) else None,
         ))
+    raw_clar = payload.get("clarifications")
+    clarifications = [
+        Clarification(
+            question=str(c.get("question") or ""),
+            answer=str(c.get("answer") or ""),
+            probe=dict(c["probe"]) if isinstance(c.get("probe"), dict) else {},
+            expect=c.get("expect"),
+        )
+        for c in (raw_clar if isinstance(raw_clar, list) else [])
+        if isinstance(c, dict) and c.get("question") and c.get("answer")
+    ]
+    hint = str(payload.get("hint") or "").strip()
+    complexity = str(payload.get("complexity") or "").strip()
     raw_cases = payload.get("cases")
     cases: list[object] = list(raw_cases) if isinstance(raw_cases, list) else []
     result.question = GeneratedQuestion(
@@ -310,6 +372,9 @@ async def generate_module(
         # exist only to satisfy the gate's coverage rule; the real check is the
         # predicate, which every generated case has already passed.
         constraints=[ParamConstraint(name=p) for p in parameters],
+        clarifications=clarifications,
+        hint_md=hint if (hint and gen.give_hints) else None,
+        complexity_target=complexity if (complexity and wants_complexity) else None,
         signatures=[
             Signature(
                 language=language,
