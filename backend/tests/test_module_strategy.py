@@ -600,3 +600,47 @@ class TestTranslationIntoTheOtherLanguages:
         ))
         assert result.question is not None, result.failed_stage
         assert len(llm.calls) == 1
+
+
+class TestFencesAreToleratedInEveryLanguage:
+    """Models fence code even when asked for a bare file.
+
+    An earlier `extract_code` matched only ```python, so a translation fenced
+    ```javascript kept its backticks, went to Node as source, and came back a
+    SyntaxError blamed on the model's translation. Measured: one of three
+    deepseek-chat questions was thrown away for it.
+    """
+
+    def test_a_python_fence_is_stripped(self) -> None:
+        assert extract_code("```python\nx = 1\n```") == "x = 1\n"
+
+    def test_any_language_tag_is_stripped(self) -> None:
+        for tag in ("javascript", "typescript", "ts", "js", ""):
+            assert extract_code(f"```{tag}\nlet x = 1;\n```") == "let x = 1;\n"
+
+    def test_an_unterminated_fence_is_stripped(self) -> None:
+        """A model that opens a fence and runs out of budget should not cost a
+        whole question."""
+        assert extract_code("```javascript\nlet x = 1;") == "let x = 1;\n"
+
+    def test_bare_code_is_untouched(self) -> None:
+        assert extract_code("let x = 1;") == "let x = 1;\n"
+
+    def test_a_fenced_translation_survives_the_stage(self) -> None:
+        import asyncio
+
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty, Language
+
+        cfg = python_only()
+        cfg.environment.languages = [Language.PYTHON, Language.TYPESCRIPT]
+        head, _, body = TS_GOOD.partition("=== SOLUTION ===\n")
+        fenced = f"{head}=== SOLUTION ===\n```typescript\n{body.strip()}\n```\n"
+        result = asyncio.run(generate_module(
+            FakeLLM([GOOD, fenced]), cfg,
+            difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+        ))
+        assert result.question is not None, result.failed_stage
+        ts = result.question.signature_for(Language.TYPESCRIPT)
+        assert ts is not None and "```" not in ts.reference_solution

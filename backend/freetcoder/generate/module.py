@@ -223,13 +223,25 @@ def scaffold_from(function_name: str, parameters: list[str]) -> str:
 
 
 def extract_code(reply: str) -> str:
-    """The module, with any Markdown fence stripped.
+    """Code, with any Markdown fence stripped.
 
     Models fence code even when asked for a bare file. That is cosmetic and
     worth tolerating rather than rejecting over.
+
+    Any info string, not just `python`: a translation comes back fenced
+    ```javascript, which an earlier version did not match, so the backticks
+    were handed to Node and came back as a SyntaxError blamed on the model's
+    translation. An unterminated fence is stripped too -- a model that opens
+    one and runs out of budget should not cost a whole question.
     """
-    fenced = re.search(r"```(?:python)?\s*\n(.*?)\n\s*```", reply, re.S)
-    return (fenced.group(1) if fenced else reply).strip() + "\n"
+    body = reply.strip()
+    fenced = re.search(r"```[^\n`]*\n(.*?)\n\s*```", body, re.S)
+    if fenced:
+        return fenced.group(1).strip() + "\n"
+    # No closing fence. Drop a leading opener and any stray trailing one.
+    body = re.sub(r"\A```[^\n`]*\n", "", body)
+    body = re.sub(r"\n\s*```\s*\Z", "", body)
+    return body.strip() + "\n"
 
 
 async def generate_module(
@@ -502,8 +514,10 @@ async def translate_signature(
             ask = f"{ask}\n\n## Your previous reply was rejected\n\n{last}"
             continue
 
-        scaffold = (sections.get("scaffold") or "").strip()
-        reference = (sections.get("solution") or "").strip()
+        # Same fence tolerance as the module itself. The prompt asks for bare
+        # code; asking is not the same as getting it.
+        scaffold = extract_code(sections.get("scaffold") or "").strip()
+        reference = extract_code(sections.get("solution") or "").strip()
         if not scaffold or not reference:
             last = "the reply is missing a SCAFFOLD or SOLUTION section"
             ask = f"{ask}\n\n## Your previous reply was rejected\n\n{last}"
