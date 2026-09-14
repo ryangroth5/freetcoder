@@ -665,3 +665,34 @@ class TestTheHiddenCasesAreNotSilentlyTruncated:
         assert result.verdict.value == "ok", result.stderr[:200]
         lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
         assert len(lines) == 40, f"only {len(lines)} of 40 cases survived"
+
+    def test_enormous_cases_do_not_kill_the_generator(self) -> None:
+        """Measured: forty cases of a hundred thousand integers is 27MB of
+        source. Embedded as a Python literal it was parsed into millions of
+        boxed ints and died with MemoryError inside the generator's limits --
+        reported as `generator_failed`, which is to say the question was thrown
+        away for being exactly as large as the format asked it to be."""
+        from freetcoder.generate.gate import GENERATOR_LIMITS
+        from freetcoder.generate.module import _replay_generator, trim_cases
+        from freetcoder.runner import run_python
+
+        cases = [{"nums": list(range(100_000)), "k": i} for i in range(40)]
+        kept = trim_cases(cases, keep_at_least=12)
+        result = run_python(_replay_generator(kept), limits=GENERATOR_LIMITS)
+        assert result.verdict.value == "ok", result.stderr[:200]
+        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        assert len(lines) == len(kept) >= 12
+
+    def test_trimming_never_drops_below_what_was_promised(self) -> None:
+        """A perf question is supposed to generate large inputs, so "too big"
+        must not mean "fewer hidden tests than the question claims"."""
+        from freetcoder.generate.module import trim_cases
+
+        huge = [{"nums": list(range(200_000))} for _ in range(30)]
+        assert len(trim_cases(huge, keep_at_least=12)) == 12
+
+    def test_trimming_keeps_everything_that_fits(self) -> None:
+        from freetcoder.generate.module import trim_cases
+
+        small = [{"n": i} for i in range(40)]
+        assert len(trim_cases(small, keep_at_least=12)) == 40

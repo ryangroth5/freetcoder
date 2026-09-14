@@ -45,7 +45,7 @@ REFERENCE_LIMITS = Limits(wall_seconds=15.0, cpu_seconds=12, memory_mb=512)
 #: yielding fourteen cases instead of forty with no error anywhere. The cap
 #: exists to bound untrusted *candidate* output; this is output we requested.
 GENERATOR_LIMITS = Limits(
-    wall_seconds=15.0, cpu_seconds=12, memory_mb=512, max_output_bytes=8_000_000
+    wall_seconds=15.0, cpu_seconds=12, memory_mb=512, max_output_bytes=32_000_000
 )
 #: Brute force is *expected* to blow through this on large inputs.
 BRUTE_FORCE_LIMITS = Limits(wall_seconds=4.0, cpu_seconds=3, memory_mb=256)

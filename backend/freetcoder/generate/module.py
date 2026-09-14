@@ -376,7 +376,10 @@ async def generate_module(
     hint = str(payload.get("hint") or "").strip()
     complexity = str(payload.get("complexity") or "").strip()
     raw_cases = payload.get("cases")
-    cases: list[object] = list(raw_cases) if isinstance(raw_cases, list) else []
+    cases: list[object] = trim_cases(
+        list(raw_cases) if isinstance(raw_cases, list) else [],
+        keep_at_least=wanted,
+    )
     result.question = GeneratedQuestion(
         title=str(payload.get("title") or "Untitled"),
         difficulty=difficulty,
@@ -453,6 +456,31 @@ def _brute_force_module(source: str, function_name: str) -> str:
     )
 
 
+#: Total JSON the replayed cases may occupy. Past this the extra cases buy
+#: nothing -- the gate runs the reference on every one of them -- while the
+#: cost of carrying them is real.
+CASE_PAYLOAD_BUDGET = 6_000_000
+
+
+def trim_cases(cases: list[object], *, keep_at_least: int) -> list[object]:
+    """As many cases as fit a byte budget, but never fewer than asked for.
+
+    A perf-discriminating question is *supposed* to generate large inputs, so
+    "too big" cannot mean "rejected". The first `keep_at_least` are kept
+    whatever they weigh, because the question promised them; beyond that, cases
+    are added only while there is room.
+    """
+    kept: list[object] = []
+    used = 0
+    for case in cases:
+        size = len(json.dumps(case))
+        if len(kept) >= keep_at_least and used + size > CASE_PAYLOAD_BUDGET:
+            break
+        kept.append(case)
+        used += size
+    return kept
+
+
 def _replay_generator(cases: list[object]) -> str:
     """The cases the module already produced, as a script that reprints them.
 
@@ -460,11 +488,15 @@ def _replay_generator(cases: list[object]) -> str:
     gate a second protocol, the cases we have already validated are replayed
     verbatim -- so what the gate sees is exactly what `is_valid` accepted.
     """
-    return (
-        "import json\n"
-        f"for case in {json.dumps(cases)}:\n"
-        "    print(json.dumps({'args': case}))\n"
-    )
+    payload = "".join(json.dumps({"args": case}) + "\n" for case in cases)
+    # One string, written out. The obvious version embedded the cases as a
+    # Python *literal*, so the interpreter parsed them into objects before
+    # printing them back: forty cases of a hundred thousand integers is 27MB of
+    # source and millions of boxed ints, which died with MemoryError inside the
+    # generator's limits and surfaced as `generator_failed` -- a question
+    # thrown away for being exactly as large as the format asked it to be.
+    # These are already JSON. They never needed to become objects.
+    return f"import sys\nsys.stdout.write({payload!r})\n"
 
 
 async def translate_signature(
