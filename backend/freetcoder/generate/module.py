@@ -34,10 +34,11 @@ from ..models import (
 from ..progress import NULL_REPORTER, Reporter
 from ..runner import Limits, Verdict
 from ..runner.sandbox import Workspace, execute
+from .delimited import ParseError, parse_sections
 from .module_probe import PROBE
 from .pipeline import _read_prompt
 from .scenarios import pick
-from .staged import StagedResult, StageOutcome, _brief
+from .staged import StagedResult, StageOutcome, _brief, reference_fault
 
 INTERFACE = Path(__file__).parent / "interface" / "question_interface.py"
 
@@ -387,6 +388,35 @@ async def generate_module(
         hidden_generator_py=_replay_generator(cases),
         brute_force_py=_brute_force_module(result.source, function_name),
     )
+
+    # Every language the format offers needs a reference, or the gate rejects
+    # the question and `execute_against` has nothing to run. The oracle stays
+    # Python; the rest reproduce its answers.
+    for other in cfg.environment.languages:
+        if other is language:
+            continue
+        stage = StageOutcome(name=f"translate:{other.value}")
+        result.stages.append(stage)
+        report_to(f"translating the solution to {other.value}")
+        stage.attempts = 1
+        sig, why = await translate_signature(
+            client,
+            source=result.source,
+            function_name=function_name,
+            parameters=parameters,
+            visible_tests=visible,
+            language=other,
+        )
+        if sig is None:
+            stage.error = why
+            report_to(
+                f"the {other.value} translation did not hold up: {why[:80]}",
+                kind="warn",
+            )
+            result.question = None
+            return result
+        result.question.signatures.append(sig)
+
     return result
 
 
@@ -421,3 +451,80 @@ def _replay_generator(cases: list[object]) -> str:
         f"for case in {json.dumps(cases)}:\n"
         "    print(json.dumps({'args': case}))\n"
     )
+
+
+async def translate_signature(
+    client: LLMClient,
+    *,
+    source: str,
+    function_name: str,
+    parameters: list[str],
+    visible_tests: list[TestCase],
+    language: Language,
+    tries: int = 2,
+) -> tuple[Signature | None, str]:
+    """The reference in one more language, checked by running it.
+
+    Only `solution` and the scaffold cross the language boundary.
+    `generate_cases`, `is_valid` and `brute_force` stay Python, because the
+    oracle is Python: another language's job is to reproduce its answers, not
+    to have opinions of its own. That is the split `_check_other_languages`
+    already assumes.
+
+    Returns `(signature, "")` or `(None, why)`.
+    """
+    ask = (
+        f"Translate this Python function into {language.value}.\n\n"
+        f"```python\n{source}\n```\n\n"
+        f"The function is `{function_name}` and its parameters, in order, are: "
+        f"{', '.join(parameters)}.\n\n"
+        "It must produce these exact answers:\n"
+        + "\n".join(
+            f"- {function_name}({t.args}) -> {t.expected!r}" for t in visible_tests
+        )
+    )
+    last = "the model produced no usable translation"
+    for _ in range(max(1, tries)):
+        try:
+            with telemetry.stage(f"translate:{language.value}"):
+                reply = await client.complete_text(
+                    system=_read_prompt("stage_translate"), user=ask, temperature=0.2
+                )
+        except LLMError as exc:
+            last = str(exc)[:200]
+            continue
+        try:
+            sections = parse_sections(reply).sections
+        except ParseError as exc:
+            last = str(exc)
+            ask = f"{ask}\n\n## Your previous reply was rejected\n\n{last}"
+            continue
+
+        scaffold = (sections.get("scaffold") or "").strip()
+        reference = (sections.get("solution") or "").strip()
+        if not scaffold or not reference:
+            last = "the reply is missing a SCAFFOLD or SOLUTION section"
+            ask = f"{ask}\n\n## Your previous reply was rejected\n\n{last}"
+            continue
+
+        fault = reference_fault(
+            scaffold=scaffold,
+            reference_solution=reference,
+            function_name=function_name,
+            visible_tests=visible_tests,
+            language=language,
+        )
+        if not fault:
+            return Signature(
+                language=language,
+                function_name=function_name,
+                scaffold=scaffold,
+                reference_solution=reference,
+            ), ""
+        last = fault
+        ask = (
+            f"{ask}\n\n## Your previous translation was rejected\n\n"
+            f"```\n{reference}\n```\n\n{fault}\n\nFix exactly that and "
+            "return both sections again."
+        )
+    return None, last

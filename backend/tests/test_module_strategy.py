@@ -72,6 +72,21 @@ EXAMPLES = [
 '''
 
 
+def python_only():
+    """A format offering Python and nothing else.
+
+    The presets offer more than one language -- `leetcode` offers JavaScript
+    too -- so a test that does not say what it wants is really testing the
+    translation stage by accident.
+    """
+    from freetcoder.formats import resolve
+    from freetcoder.models import Language
+
+    cfg = resolve("leetcode")
+    cfg.environment.languages = [Language.PYTHON]
+    return cfg
+
+
 def swap(original: str, new: str) -> str:
     assert original in GOOD, original[:40]
     return GOOD.replace(original, new)
@@ -204,7 +219,6 @@ class TestTheGateAcceptsWhatWeBuild:
     def test_a_probed_module_becomes_an_accepted_question(self) -> None:
         import asyncio
 
-        from freetcoder.formats import resolve
         from freetcoder.generate.gate import validate_question
         from freetcoder.generate.module import generate_module
         from freetcoder.llm import FakeLLM
@@ -212,7 +226,7 @@ class TestTheGateAcceptsWhatWeBuild:
 
         result = asyncio.run(generate_module(
             FakeLLM([GOOD]),
-            resolve("leetcode", topics=["sliding window"]),
+            python_only(),
             difficulty=Difficulty.MEDIUM,
             tries_per_stage=1,
         ))
@@ -223,13 +237,12 @@ class TestTheGateAcceptsWhatWeBuild:
     def test_the_scaffold_matches_the_solution_signature(self) -> None:
         import asyncio
 
-        from freetcoder.formats import resolve
         from freetcoder.generate.module import generate_module
         from freetcoder.llm import FakeLLM
         from freetcoder.models import Difficulty
 
         result = asyncio.run(generate_module(
-            FakeLLM([GOOD]), resolve("leetcode"),
+            FakeLLM([GOOD]), python_only(),
             difficulty=Difficulty.MEDIUM, tries_per_stage=1,
         ))
         assert result.question is not None
@@ -241,7 +254,6 @@ class TestTheGateAcceptsWhatWeBuild:
         """The failing critic's own words go back to the model."""
         import asyncio
 
-        from freetcoder.formats import resolve
         from freetcoder.generate.module import generate_module
         from freetcoder.llm import FakeLLM
         from freetcoder.models import Difficulty
@@ -250,7 +262,7 @@ class TestTheGateAcceptsWhatWeBuild:
                               "    return undefined_total\n\n\ndef brute_force")
         llm = FakeLLM([broken, GOOD])
         result = asyncio.run(generate_module(
-            llm, resolve("leetcode"), difficulty=Difficulty.MEDIUM,
+            llm, python_only(), difficulty=Difficulty.MEDIUM,
             tries_per_stage=2,
         ))
         assert result.question is not None, result.failed_stage
@@ -332,14 +344,13 @@ class TestTheGatesBruteForceCheckIsNotVacuous:
         """Bypass the probe and hand the gate what it would have received."""
         import asyncio
 
-        from freetcoder.formats import resolve
         from freetcoder.generate.gate import validate_question
         from freetcoder.generate.module import generate_module
         from freetcoder.llm import FakeLLM
         from freetcoder.models import Difficulty, GateOutcome
 
         result = asyncio.run(generate_module(
-            FakeLLM([GOOD]), resolve("leetcode"),
+            FakeLLM([GOOD]), python_only(),
             difficulty=Difficulty.MEDIUM, tries_per_stage=1,
         ))
         assert result.question is not None
@@ -437,13 +448,12 @@ class TestTheNamesBeyondTheCoreContract:
         model's restraint."""
         import asyncio
 
-        from freetcoder.formats import resolve
         from freetcoder.generate.module import generate_module
         from freetcoder.llm import FakeLLM
         from freetcoder.models import Difficulty
 
         def build(*, hints: bool, perf: bool):
-            cfg = resolve("leetcode")
+            cfg = python_only()
             cfg.generation.give_hints = hints
             cfg.scoring.perf_tests = perf
             return asyncio.run(generate_module(
@@ -465,12 +475,11 @@ class TestTheNamesBeyondTheCoreContract:
     def test_the_prompt_says_which_names_are_wanted(self) -> None:
         import asyncio
 
-        from freetcoder.formats import resolve
         from freetcoder.generate.module import generate_module
         from freetcoder.llm import FakeLLM
         from freetcoder.models import Difficulty
 
-        cfg = resolve("leetcode")
+        cfg = python_only()
         cfg.generation.give_hints = False
         llm = FakeLLM([RICH])
         asyncio.run(generate_module(
@@ -490,3 +499,104 @@ class TestTheProbeSourceIsValidPython:
         from freetcoder.generate.module_probe import PROBE
 
         compile(PROBE, "<probe>", "exec")
+
+
+#: A correct TypeScript translation of GOOD's `solution`, in the two sections
+#: the translate stage asks for.
+TS_GOOD = '''=== SCAFFOLD ===
+function solution(levels: number[], drift: number): number {
+  return 0;
+}
+=== SOLUTION ===
+function solution(levels: number[], drift: number): number {
+  let best = 0;
+  for (let i = 0; i < levels.length; i++) {
+    let lo = levels[i];
+    let hi = levels[i];
+    for (let j = i; j < levels.length; j++) {
+      lo = Math.min(lo, levels[j]);
+      hi = Math.max(hi, levels[j]);
+      if (hi - lo <= drift) best = Math.max(best, j - i + 1);
+    }
+  }
+  return best;
+}
+'''
+
+
+class TestTranslationIntoTheOtherLanguages:
+    """Only `solution` and the scaffold cross the boundary. `generate_cases`,
+    `is_valid` and `brute_force` stay Python, because Python is the oracle."""
+
+    def _config(self):
+        from freetcoder.models import Language
+
+        cfg = python_only()
+        cfg.environment.languages = [Language.PYTHON, Language.TYPESCRIPT]
+        return cfg
+
+    def _run(self, replies):
+        import asyncio
+
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        return asyncio.run(generate_module(
+            FakeLLM(list(replies)), self._config(),
+            difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+        ))
+
+    def test_a_second_language_gets_its_own_verified_signature(self) -> None:
+        from freetcoder.models import Language
+
+        result = self._run([GOOD, TS_GOOD])
+        assert result.question is not None, result.failed_stage
+        langs = {s.language for s in result.question.signatures}
+        assert langs == {Language.PYTHON, Language.TYPESCRIPT}
+        ts = result.question.signature_for(Language.TYPESCRIPT)
+        assert ts is not None and "Math.min" in ts.reference_solution
+
+    def test_the_gate_accepts_a_two_language_question(self) -> None:
+        """The end of the point: the gate re-runs the translation against the
+        oracle's answers, so this proves the two agree by execution."""
+        from freetcoder.generate.gate import validate_question
+        from freetcoder.models import GateOutcome
+
+        result = self._run([GOOD, TS_GOOD])
+        assert result.question is not None, result.failed_stage
+        report = validate_question(
+            result.question, languages=self._config().environment.languages
+        )
+        assert report.outcome is GateOutcome.ACCEPTED, report.detail
+
+    def test_a_translation_that_disagrees_is_rejected(self) -> None:
+        """A wrong translation must not reach the gate as a half-built
+        question -- it fails at its own stage, named, so the failure is
+        attributable."""
+        wrong = TS_GOOD.replace("best = Math.max(best, j - i + 1)", "best = 99")
+        result = self._run([GOOD, wrong])
+        assert result.question is None
+        assert result.failed_stage == "translate:typescript"
+        assert result.stages[-1].error
+
+    def test_a_reply_without_the_sections_is_rejected(self) -> None:
+        result = self._run([GOOD, "here you go:\nfunction solution() {}"])
+        assert result.question is None
+        assert result.failed_stage == "translate:typescript"
+
+    def test_a_single_language_format_asks_for_no_translation(self) -> None:
+        """One call, not two. The translation is not free."""
+        import asyncio
+
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        llm = FakeLLM([GOOD])
+        result = asyncio.run(generate_module(
+            llm, python_only(),
+            difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+        ))
+        assert result.question is not None, result.failed_stage
+        assert len(llm.calls) == 1
