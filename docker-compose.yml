@@ -80,12 +80,22 @@ services:
     volumes:
       - freetcoder-data:/data
     environment:
+      # Stated here as well as baked into the image, so the volume above and
+      # the path that uses it are visible in one place. `dev` sets it in
+      # compose and prod had it only in the Dockerfile; changing this file
+      # alone would not have moved the database.
+      FREETCODER_DB_PATH: /data/freetcoder.db
       FREETCODER_LLM_BASE_URL: ${FREETCODER_LLM_BASE_URL:-https://openrouter.ai/api/v1}
       FREETCODER_LLM_API_KEY: ${FREETCODER_LLM_API_KEY:-}
       FREETCODER_LLM_MODEL: ${FREETCODER_LLM_MODEL:-anthropic/claude-sonnet-4.5}
       # Set to 1 to serve recorded questions with no API key.
       FREETCODER_FAKE_LLM: ${FREETCODER_FAKE_LLM:-0}
       FREETCODER_LIBRARY_URL: ${FREETCODER_LIBRARY_URL:-http://library:8090}
+    # The default library URL names a service, so `make prod` alone pointed at
+    # a host that was never started: a guaranteed connection error on every
+    # run. It degrades gracefully, which is exactly why nobody noticed.
+    depends_on:
+      - library
     tmpfs:
       - /tmp:exec,mode=1777,size=256m
     profiles: ["prod"]

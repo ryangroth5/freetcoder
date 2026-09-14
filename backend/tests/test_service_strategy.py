@@ -107,27 +107,64 @@ class TestTheCacheKeepsTheStrategiesApart:
         finally:
             await store.close()
 
-    async def test_a_question_a_session_is_using_is_kept(self) -> None:
-        """Someone halfway through a run must not lose the problem in front of
-        them because the key format changed."""
+    async def _with(self, *, started_at: float, finished_at: float | None):
+        """One legacy question, referenced by one session with these times."""
         import json
 
         store = Storage(None)
         await store.connect()
+        await store.db.execute(
+            "INSERT INTO questions (id, cache_key, language, payload, created_at)"
+            " VALUES ('q1', 'leetcode||Medium|python|,|python', 'python', ?, 0)",
+            (json.dumps({}),),
+        )
+        await store.db.execute(
+            "INSERT INTO sessions (id, config, question_ids, started_at, finished_at)"
+            " VALUES ('s1', '{}', ?, ?, ?)",
+            (json.dumps(["q1"]), started_at, finished_at),
+        )
+        await store.db.commit()
+        return store
+
+    async def _remaining(self, store: Storage) -> int:
+        await store._drop_unkeyed_questions()
+        cur = await store.db.execute("SELECT COUNT(*) AS n FROM questions")
+        return int((await cur.fetchone())["n"])
+
+    async def test_a_question_someone_is_looking_at_is_kept(self) -> None:
+        """Someone halfway through a run must not lose the problem in front of
+        them because the key format changed."""
+        import time
+
+        store = await self._with(started_at=time.time() - 60, finished_at=None)
         try:
-            await store.db.execute(
-                "INSERT INTO questions (id, cache_key, language, payload, created_at)"
-                " VALUES ('live', 'leetcode||Medium|python|,|python', 'python', ?, 0)",
-                (json.dumps({}),),
-            )
-            await store.db.execute(
-                "INSERT INTO sessions (id, config, question_ids, started_at)"
-                " VALUES ('s1', '{}', ?, 0)",
-                (json.dumps(["live"]),),
-            )
-            await store.db.commit()
-            await store._drop_unkeyed_questions()
-            cur = await store.db.execute("SELECT COUNT(*) AS n FROM questions")
-            assert (await cur.fetchone())["n"] == 1
+            assert await self._remaining(store) == 1
+        finally:
+            await store.close()
+
+    async def test_an_abandoned_session_does_not_pin_it_forever(self) -> None:
+        """The first version kept anything referenced by *any* session, which
+        on a real database was every row: each cached question was created for
+        some session, so the clause could never fire. Narrowing it to
+        unfinished sessions was barely better -- 1532 of 1538 were unfinished,
+        because people start runs and walk away."""
+        import time
+
+        store = await self._with(
+            started_at=time.time() - 10 * 86_400, finished_at=None
+        )
+        try:
+            assert await self._remaining(store) == 0
+        finally:
+            await store.close()
+
+    async def test_a_finished_session_does_not_pin_it(self) -> None:
+        import time
+
+        store = await self._with(
+            started_at=time.time() - 60, finished_at=time.time() - 30
+        )
+        try:
+            assert await self._remaining(store) == 0
         finally:
             await store.close()

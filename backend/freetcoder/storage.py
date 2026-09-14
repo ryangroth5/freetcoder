@@ -83,6 +83,12 @@ CREATE TABLE IF NOT EXISTS app_settings (
 """
 
 
+#: How recent an unfinished session has to be for its questions to count as
+#: in use. Long enough to cover a practice run someone walked away from for
+#: lunch, short enough that abandoned sessions stop pinning dead rows.
+LIVE_SESSION_SECONDS = 86_400.0
+
+
 def cache_key(
     config: FormatConfig,
     difficulty: str,
@@ -161,10 +167,18 @@ class Storage:
         acceptances, and a fallback cache full of them would make the switch
         look like it changed nothing.
 
-        A question still referenced by a session is kept regardless. Someone
-        halfway through a practice run should not lose the problem they are
-        looking at because the key format changed underneath them.
+        A question someone is *currently* looking at is kept. "Referenced by
+        any session" was the first attempt and it protected everything: every
+        cached question was created for some session, so the clause could never
+        fire -- on a real database it kept all 802 legacy rows while reading
+        like a careful safeguard. Narrowing it to unfinished sessions barely
+        helped either, because an abandoned session stays unfinished forever
+        and 1532 of 1538 were.
+
+        So it is bounded by time as well: a session that has not been touched
+        in a day is not one anybody is halfway through.
         """
+        cutoff = time.time() - LIVE_SESSION_SECONDS
         await self.db.execute(
             "DELETE FROM questions "
             # Six separators is the current key; anything shorter predates the
@@ -172,7 +186,10 @@ class Storage:
             "WHERE length(cache_key) - length(replace(cache_key, '|', '')) < 6 "
             "  AND NOT EXISTS ("
             "        SELECT 1 FROM sessions s"
-            "         WHERE s.question_ids LIKE '%' || questions.id || '%')"
+            "         WHERE s.finished_at IS NULL"
+            "           AND s.started_at > ?"
+            "           AND s.question_ids LIKE '%' || questions.id || '%')",
+            (cutoff,),
         )
 
     async def close(self) -> None:
