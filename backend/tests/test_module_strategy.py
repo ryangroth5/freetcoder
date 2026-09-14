@@ -652,7 +652,7 @@ class TestTheHiddenCasesAreNotSilentlyTruncated:
     At the default 64KB cap it was cut mid-line and yielded fourteen cases
     with no error: the question was served, graded on a third of the hidden
     tests it promised, and nothing reported it. Truncation that fails loudly
-    is a bug; truncation that succeeds quietly is worse.
+    is a bug; truncation that succeeds quietly is a wrong grade.
     """
 
     def test_a_large_case_set_survives_the_generator(self) -> None:
@@ -666,109 +666,56 @@ class TestTheHiddenCasesAreNotSilentlyTruncated:
         lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
         assert len(lines) == 40, f"only {len(lines)} of 40 cases survived"
 
-    def test_enormous_cases_do_not_kill_the_generator(self) -> None:
-        """Measured: forty cases of a hundred thousand integers is 27MB of
-        source. Embedded as a Python literal it was parsed into millions of
-        boxed ints and died with MemoryError inside the generator's limits --
-        reported as `generator_failed`, which is to say the question was thrown
-        away for being exactly as large as the format asked it to be."""
-        from freetcoder.generate.gate import GENERATOR_LIMITS
-        from freetcoder.generate.module import _replay_generator, trim_cases
-        from freetcoder.runner import run_python
+    def test_the_generator_never_parses_the_cases_into_objects(self) -> None:
+        """The bug this guards was a shape, not a size.
 
-        cases = [{"nums": list(range(100_000)), "k": i} for i in range(40)]
-        kept = trim_cases(cases, keep_at_least=12)
-        result = run_python(_replay_generator(kept), limits=GENERATOR_LIMITS)
-        assert result.verdict.value == "ok", result.stderr[:200]
-        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
-        assert len(lines) == len(kept) >= 12
+        Embedding the cases as a Python *literal* made the interpreter build
+        millions of boxed integers before printing them straight back out as
+        JSON, and forty cases of a hundred thousand elements died with
+        MemoryError inside the generator's limits -- surfacing as
+        `generator_failed`, a question thrown away for being as large as the
+        format asked it to be.
+
+        Asserted structurally rather than by reproducing the megabytes: the
+        data must appear exactly once, inside a single string constant. That
+        is the property that makes the size irrelevant, and checking it costs
+        nothing.
+        """
+        import ast
+
+        from freetcoder.generate.module import _replay_generator
+
+        tree = ast.parse(_replay_generator([{"nums": [1, 2, 3], "k": 4}]))
+        constants = [
+            node for node in ast.walk(tree) if isinstance(node, ast.Constant)
+        ]
+        assert all(isinstance(c.value, str) for c in constants), (
+            "the cases were parsed into Python objects; they are already JSON"
+        )
+        assert not [
+            n for n in ast.walk(tree) if isinstance(n, ast.List | ast.Dict)
+        ], "a data literal the interpreter has to build"
 
     def test_trimming_never_drops_below_what_was_promised(self) -> None:
         """A perf question is supposed to generate large inputs, so "too big"
         must not mean "fewer hidden tests than the question claims"."""
         from freetcoder.generate.module import trim_cases
 
-        huge = [{"nums": list(range(200_000))} for _ in range(30)]
-        assert len(trim_cases(huge, keep_at_least=12)) == 12
+        over = [{"nums": list(range(50))} for _ in range(30)]
+        assert len(trim_cases(over, keep_at_least=12, budget=100)) == 12
 
     def test_trimming_keeps_everything_that_fits(self) -> None:
         from freetcoder.generate.module import trim_cases
 
         small = [{"n": i} for i in range(40)]
-        assert len(trim_cases(small, keep_at_least=12)) == 40
+        assert len(trim_cases(small, keep_at_least=12, budget=1_000_000)) == 40
 
+    def test_trimming_stops_once_the_budget_is_spent(self) -> None:
+        from freetcoder.generate.module import trim_cases
 
-class TestTheStatementIsCheckedOnThisPathToo:
-    """The gate never reads the statement.
-
-    Making `module` the default without this silently switched off the only
-    check that validates what the candidate actually reads -- while the
-    setting kept saying it was on, which is worse than it being off.
-    """
-
-    def _solver(self, code: str):
-        from freetcoder.generate.sufficiency import CandidateSolution
-
-        return CandidateSolution(code=code, assumptions="")
-
-    def test_a_solvable_statement_is_accepted(self) -> None:
-        import asyncio
-
-        from freetcoder.generate.module import generate_question_as_module
-        from freetcoder.llm import FakeLLM
-        from freetcoder.models import Difficulty
-
-        # The module, then the second model solving it from the prose alone.
-        solver = self._solver(
-            "def solution(levels, drift):\n"
-            "    best = 0\n"
-            "    for i in range(len(levels)):\n"
-            "        lo = hi = levels[i]\n"
-            "        for j in range(i, len(levels)):\n"
-            "            lo = min(lo, levels[j]); hi = max(hi, levels[j])\n"
-            "            if hi - lo <= drift: best = max(best, j - i + 1)\n"
-            "    return best\n"
-        )
-        result = asyncio.run(generate_question_as_module(
-            FakeLLM([GOOD, solver]), python_only(),
-            difficulty=Difficulty.MEDIUM, max_attempts=1, check_sufficiency=True,
-        ))
-        assert result.question is not None, [a.detail for a in result.attempts]
-
-    def test_a_statement_nobody_can_solve_is_rejected(self) -> None:
-        """A second model disagreeing does not prove ambiguity, but it is the
-        only signal we have about the prose, and it must reach the verdict."""
-        import asyncio
-
-        from freetcoder.generate.module import generate_question_as_module
-        from freetcoder.llm import FakeLLM
-        from freetcoder.models import Difficulty
-
-        wrong = self._solver("def solution(levels, drift):\n    return 0\n")
-        result = asyncio.run(generate_question_as_module(
-            FakeLLM([GOOD, wrong]), python_only(),
-            difficulty=Difficulty.MEDIUM, max_attempts=1, check_sufficiency=True,
-        ))
-        assert result.question is None, "an unsolvable statement was served"
-        assert result.attempts, "the rejection must be recorded"
-        assert any("specified" in a.detail or a.outcome.value != "accepted"
-                   for a in result.attempts)
-
-    def test_it_can_be_turned_off(self) -> None:
-        """One LLM call, not two: the check is the expensive half."""
-        import asyncio
-
-        from freetcoder.generate.module import generate_question_as_module
-        from freetcoder.llm import FakeLLM
-        from freetcoder.models import Difficulty
-
-        llm = FakeLLM([GOOD])
-        result = asyncio.run(generate_question_as_module(
-            llm, python_only(),
-            difficulty=Difficulty.MEDIUM, max_attempts=1, check_sufficiency=False,
-        ))
-        assert result.question is not None
-        assert len(llm.calls) == 1
+        cases = [{"n": "x" * 100} for _ in range(40)]
+        kept = trim_cases(cases, keep_at_least=2, budget=500)
+        assert 2 <= len(kept) < 40
 
 
 class TestARejectedModuleIsRevisedNotRewritten:

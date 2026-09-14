@@ -480,19 +480,25 @@ def _brute_force_module(source: str, function_name: str) -> str:
 CASE_PAYLOAD_BUDGET = 6_000_000
 
 
-def trim_cases(cases: list[object], *, keep_at_least: int) -> list[object]:
+def trim_cases(
+    cases: list[object], *, keep_at_least: int, budget: int = CASE_PAYLOAD_BUDGET
+) -> list[object]:
     """As many cases as fit a byte budget, but never fewer than asked for.
 
     A perf-discriminating question is *supposed* to generate large inputs, so
     "too big" cannot mean "rejected". The first `keep_at_least` are kept
     whatever they weigh, because the question promised them; beyond that, cases
     are added only while there is room.
+
+    `budget` is a parameter so the rule can be tested at a scale that fits in
+    a test process. Proving it with real megabytes cost 400MB of resident
+    memory to demonstrate arithmetic.
     """
     kept: list[object] = []
     used = 0
     for case in cases:
         size = len(json.dumps(case))
-        if len(kept) >= keep_at_least and used + size > CASE_PAYLOAD_BUDGET:
+        if len(kept) >= keep_at_least and used + size > budget:
             break
         kept.append(case)
         used += size
