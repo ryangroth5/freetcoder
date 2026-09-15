@@ -19,3 +19,14 @@ playwright-report/
 # Bench artifacts: run output, not source.
 bench-*.json
 bench-*.log
+
+# Agent/editor local state. `.claude/settings.local.json` was previously
+# ignored only by a global ignore file, so it was invisible here and would have
+# been committed by anyone cloning onto a machine without that rule.
+.claude/
+.idea/
+.vscode/
+
+*.sqlite
+coverage*
+htmlcov/

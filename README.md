@@ -13,7 +13,7 @@ configure.
 ## Quick start
 
 ```bash
-git clone <this repo> && cd freetcoder
+git clone https://github.com/ryangroth5/freetcoder && cd freetcoder
 cp .env.example .env        # then put your key in it
 make dev
 ```
@@ -25,10 +25,23 @@ repointing the endpoint at a hostile host.
 
 Then open **http://localhost:5173**.
 
+**Expect the first question to take one to several minutes.** Almost all of
+that is the model writing it; freetcoder's own share — linting, type-checking
+and executing the result — is about two seconds. The progress panel names each
+step as it runs and tells you afterwards where the time went, so you can see
+which it was. `deepseek/deepseek-v4.1-flash` was the fastest model measured
+that also produced good questions; see [Which model](#which-model).
+
 **New here?** [docs/using-freetcoder.md](docs/using-freetcoder.md) is the guide
 to actually using it — the screens, the tutor, what Run and Submit each do, and
 what to check when something looks wrong. The rest of this file is the overview
 and the design rationale.
+
+**Curious what came out of building it?**
+[docs/findings.md](docs/findings.md) is the short version: why asking a model
+for JSON was the bottleneck, what four models actually scored, and the three
+bug classes that cost the most time.
+[docs/architecture.md](docs/architecture.md) is how the pieces fit.
 
 Prefer to kick the tyres with no API key at all? Recorded questions are served
 in offline mode:
@@ -102,7 +115,9 @@ Server settings persist in the SQLite database, so they need a volume;
 pretending. Theme and default language are stored per browser instead, so two
 people sharing a container do not overwrite each other.
 
-**Which model.** The default is `anthropic/claude-sonnet-4.5`, which has not
+### Which model
+
+The default is `anthropic/claude-sonnet-4.5`, which has not
 been measured on this pipeline. What has, on OpenRouter, three questions each:
 
 | model | accepted | first try | complete prose |
@@ -345,6 +360,8 @@ docs/using-freetcoder.md      how to use the app (the only user-facing doc)
 docs/container-discovery.md   why the Dockerfile and build config look like this
 docs/testing.md               the four suites, what they cost, and what e2e-prod caught
 docs/question-generation.md   how a question is generated, gated and repaired
+docs/findings.md              what the measurements showed, and the lessons
+docs/architecture.md          how the pieces fit at runtime
 ```
 
 **Read `docs/container-discovery.md` before changing the Dockerfile, the runner,
@@ -357,11 +374,46 @@ ES modules.
 
 ## Status
 
-Python, JavaScript and TypeScript working end to end — 476 backend tests,
-27 library tests, 4 frontend unit tests, and 58 browser tests run against both
-the dev stack and the built production image.
+Python, JavaScript and TypeScript work end to end. **663 backend tests, 27
+library tests, 14 frontend unit tests and 59 browser tests**, the last run
+against both the dev stack and the built production image.
 
-Not yet built: Go (needs an adapter and toolchain; the compile phase it requires
-already exists for TypeScript), SQL concentration (needs a SQLite runner
-adapter), system design (no executable answer, needs LLM-rubric grading; flagged
-in the UI), attempt analytics.
+Questions are generated as Python modules and validated by execution before you
+see them; measured across four models, the best of them produced three
+acceptable questions out of three on the first try. The numbers are in
+[docs/findings.md](docs/findings.md).
+
+## Roadmap
+
+Honest about what is missing, roughly in the order it would be worth doing.
+
+**Reduce the wait.** A question takes one to several minutes, and 98–99% of
+that is the provider. There is nothing left to optimise in the pipeline — our
+own share is about two seconds — so this is a question of model choice and
+routing, not code.
+
+**Resumable sessions.** There is no client-side routing at all: a session has no
+URL, so a reload loses the problem you were working on. This is the most
+obviously missing thing for anyone practising seriously.
+
+**Go.** `Language.GO` exists in the enum and maps to `gopls`, but there is no
+runner adapter and no toolchain in the image. The compile-then-run phase it
+needs already exists for TypeScript, so the shape is known.
+
+**SQL and system design.** SQL needs a SQLite runner adapter. System design has
+no executable answer at all and would need rubric grading by a model, which
+sits awkwardly beside a project whose whole premise is machine-checkable
+validation. Both are flagged as unsupported in the picker rather than quietly
+producing bad questions.
+
+**Multi-file questions.** The interface leaves room for a `FILES` mapping —
+enough for React-style problems or questions graded by a unit-test suite — but
+the workspace writer would need directory support and traversal checks first.
+
+**Attempt analytics.** Submissions and verdicts are already stored; nothing
+reads them back to tell you what you keep getting wrong.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). Contributions welcome; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
