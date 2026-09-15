@@ -767,3 +767,31 @@ newlines inside JSON when the others did not.
 "the model did not answer", which scores identically to a model that answered
 badly. When a run shows an unexpected collapse, read the log before believing
 the table.
+
+## Retries are nested, and they multiply
+
+Four loops re-ask the model, and none of them can see the others:
+
+| where | budget | reports to the log? |
+|---|---|---|
+| `client.py` `complete_text` / `complete_json` | `llm_max_retries` (3) | yes, since it gained a callback |
+| `module.py` `generate_module` | `tries_per_stage` (3) | yes |
+| `module.py` `generate_question_as_module` | `repair_rounds` (3) | yes |
+| the same, regenerating from scratch | `generation_attempts` (4) | yes |
+
+They compose by multiplication, and nobody chose the product. It surfaced as a
+progress step that sat at **677 seconds**: a 300s deadline fired three times
+inside `complete_text`, which logged to the container and reported nothing, so
+the step looked frozen and only the final failure reached the screen. A working
+call in the same run took 103s.
+
+Two things fixed it. The client no longer re-sends a **timeout** — a 429 or a
+5xx says the provider was momentarily unable and is worth another go, while a
+timeout says this request is too slow for this budget and the identical request
+will be too. And the client can now narrate a retry through an `on_retry`
+callback, joined to the progress reporter in `generate_module`, so a re-send is
+a line in the log rather than a silent minute.
+
+The lesson generalises past this bug: **a retry that reports nothing is
+indistinguishable from a hang**, and retry budgets at different layers need to
+be read as a product rather than one at a time.

@@ -929,3 +929,59 @@ class TestTopicsSurviveTheModulePath:
         result = self._run(GOOD)
         assert result.question is not None, result.failed_stage
         assert result.question.topics == []
+
+
+class TestARetryIsVisibleInTheLog:
+    """A retry that reports nothing is a silent minute. Three of them is what
+    made one step sit at 677 seconds with nothing to read."""
+
+    def test_the_client_can_narrate_its_own_retries(self) -> None:
+        import asyncio
+
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+        from freetcoder.progress import ProgressRegistry, Reporter
+
+        class Flaky(FakeLLM):
+            """Reports one retry through the hook, then answers."""
+
+            def __init__(self, reply: str) -> None:
+                super().__init__([reply])
+                self.on_retry = None
+
+            async def complete_text(self, *, system: str, user: str,
+                                    temperature: float = 0.7) -> str:
+                if self.on_retry is not None:
+                    self.on_retry("the provider did not answer within 300s "
+                                  "— asking again (2 of 3)")
+                return await super().complete_text(
+                    system=system, user=user, temperature=temperature
+                )
+
+        registry = ProgressRegistry()
+        registry.start("run")
+        asyncio.run(generate_module(
+            Flaky(GOOD), python_only(), difficulty=Difficulty.MEDIUM,
+            tries_per_stage=1, report_to=Reporter(registry, "run"),
+        ))
+        run = registry.get("run")
+        assert run is not None
+        said = [s.message for s in run.steps]
+        assert any("asking again (2 of 3)" in m for m in said), said
+        assert any(s.kind == "warn" for s in run.steps)
+
+    def test_the_hook_is_removed_afterwards(self) -> None:
+        """It is set around one call, not left dangling on a shared client."""
+        import asyncio
+
+        from freetcoder.generate.module import generate_module
+        from freetcoder.llm import FakeLLM
+        from freetcoder.models import Difficulty
+
+        llm = FakeLLM([GOOD])
+        llm.on_retry = None
+        asyncio.run(generate_module(
+            llm, python_only(), difficulty=Difficulty.MEDIUM, tries_per_stage=1,
+        ))
+        assert llm.on_retry is None

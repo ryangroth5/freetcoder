@@ -14,6 +14,18 @@ class LLMError(RuntimeError):
     """The provider failed, or returned something we could not use."""
 
 
+class LLMTimeout(LLMError):
+    """The provider did not answer inside the deadline.
+
+    Distinct from every other failure because it is the one worth *not*
+    retrying: a 429 or a 5xx says the provider was momentarily unable, while a
+    timeout says this request is too slow for this budget -- and re-sending it
+    unchanged is the least promising use of another full deadline. Measured: a
+    300s deadline fired three times inside one progress step, 677 seconds of
+    silence for a call that takes 103s when it works.
+    """
+
+
 class LLMClient(Protocol):
     """Anything that can turn a prompt into a validated pydantic model."""
 

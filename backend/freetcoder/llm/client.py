@@ -19,7 +19,7 @@ from openai import APIError, AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
 from . import telemetry
-from .base import LLMError
+from .base import LLMError, LLMTimeout
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,16 @@ class OpenAICompatibleClient:
         #: OpenRouter: a call sat for eleven minutes against a 300s timeout,
         #: with the progress log frozen on the step that started it.
         self._deadline_s = timeout_s
+        #: Called with the reason each time a request is about to be re-sent.
+        #: The client has no business reaching into the progress registry, but
+        #: a retry that reports nothing is a silent minute -- and three of them
+        #: is what made one step sit at 677 seconds with nothing to read.
+        self.on_retry: Callable[[str], None] | None = None
+
+    def _retrying(self, exc: Exception, attempt: int, of: int) -> None:
+        log.warning("request failed (attempt %d/%d): %s", attempt, of, exc)
+        if self.on_retry is not None:
+            self.on_retry(f"{exc} — asking again ({attempt + 1} of {of})")
 
     async def _ask(self, **kwargs: Any) -> Any:
         """One provider call, bounded by the clock."""
@@ -78,7 +88,7 @@ class OpenAICompatibleClient:
                 timeout=self._deadline_s,
             )
         except TimeoutError as exc:
-            raise LLMError(
+            raise LLMTimeout(
                 f"the provider did not answer within {self._deadline_s:.0f}s"
             ) from exc
 
@@ -126,9 +136,17 @@ class OpenAICompatibleClient:
                     "LLM output failed validation (attempt %d): %s",
                     attempt + 1, fields or "unknown field",
                 )
+            except LLMTimeout:
+                # Same reasoning as complete_text: an identical request that
+                # just burned a whole deadline will burn the next one too.
+                raise
             except (APIError, json.JSONDecodeError, ValueError) as exc:
                 last = exc
-                log.warning("LLM request failed (attempt %d): %s", attempt + 1, exc)
+                tries = max(1, self._max_retries)
+                if attempt + 1 < tries:
+                    self._retrying(exc, attempt + 1, tries)
+                else:
+                    log.warning("LLM request failed (final attempt): %s", exc)
         raise LLMError(
             f"no valid response after {max(1, self._max_retries)} attempt(s): {last}"
         ) from last
@@ -138,7 +156,8 @@ class OpenAICompatibleClient:
     ) -> str:
         """A plain reply, with no response_format at all."""
         last: Exception | None = None
-        for _ in range(max(1, self._max_retries)):
+        tries = max(1, self._max_retries)
+        for attempt in range(1, tries + 1):
             try:
                 with telemetry.record(self._model, "text") as entry:
                     resp = await self._ask(
@@ -163,9 +182,15 @@ class OpenAICompatibleClient:
                 if not content or not content.strip():
                     raise LLMError("empty response from provider")
                 return str(content)
+            except LLMTimeout:
+                # Not retried here. The caller's own loop can vary the prompt;
+                # this one can only re-send the identical request that already
+                # exhausted a full deadline.
+                raise
             except (APIError, LLMError) as exc:
                 last = exc
-                log.warning("text request failed: %s", exc)
+                if attempt < tries:
+                    self._retrying(exc, attempt, tries)
         raise LLMError(f"no text response: {last}") from last
 
     async def complete_json_with_tools(

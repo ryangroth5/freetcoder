@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import random
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -245,6 +247,26 @@ def extract_code(reply: str) -> str:
     return body.strip() + "\n"
 
 
+
+@contextmanager
+def _narrating(client: LLMClient, report_to: Reporter) -> Iterator[None]:
+    """Let the client say when it is about to re-send a request.
+
+    Without it a retry is a silent minute. The client has no business reaching
+    into the progress registry, so it calls back instead and this is where the
+    two are joined.
+    """
+    hook = getattr(client, "on_retry", None)
+    settable = hasattr(client, "on_retry")
+    if settable:
+        client.on_retry = lambda why: report_to(why[:110], kind="warn")  # type: ignore[attr-defined]
+    try:
+        yield
+    finally:
+        if settable:
+            client.on_retry = hook  # type: ignore[attr-defined]
+
+
 async def generate_module(
     client: LLMClient,
     config: FormatConfig,
@@ -332,7 +354,7 @@ async def generate_module(
                      f"{attempt} of {tries_per_stage}"
             )
         try:
-            with telemetry.stage("module"):
+            with telemetry.stage("module"), _narrating(client, report_to):
                 reply = await client.complete_text(
                     system=_read_prompt("stage_module"), user=ask, temperature=0.7
                 )
@@ -456,6 +478,7 @@ async def generate_module(
             parameters=parameters,
             visible_tests=visible,
             language=other,
+            report_to=report_to,
         )
         if sig is None:
             stage.error = why
@@ -547,6 +570,7 @@ async def translate_signature(
     visible_tests: list[TestCase],
     language: Language,
     tries: int = 2,
+    report_to: Reporter = NULL_REPORTER,
 ) -> tuple[Signature | None, str]:
     """The reference in one more language, checked by running it.
 
@@ -571,7 +595,9 @@ async def translate_signature(
     last = "the model produced no usable translation"
     for _ in range(max(1, tries)):
         try:
-            with telemetry.stage(f"translate:{language.value}"):
+            with telemetry.stage(f"translate:{language.value}"), _narrating(
+                client, report_to
+            ):
                 reply = await client.complete_text(
                     system=_read_prompt("stage_translate"), user=ask, temperature=0.2
                 )

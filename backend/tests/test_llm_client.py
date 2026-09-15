@@ -144,3 +144,102 @@ class TestAProviderThatNeverAnswers:
 
         client._client.chat.completions.create = answers  # type: ignore[method-assign]
         assert await client.complete_text(system="s", user="u") == "hello"
+
+
+class TestATimeoutIsNotRetried:
+    """Measured: a 300s deadline fired three times inside one progress step --
+    677 seconds of silence for a call that takes 103s when it works.
+
+    A 429 or a 5xx says the provider was momentarily unable. A timeout says
+    this request is too slow for this budget, and re-sending it unchanged is
+    the least promising thing to do with another full deadline. The caller's
+    own loop can vary the prompt; this one cannot.
+    """
+
+    def _client(self, **kw):
+        from freetcoder.llm.client import OpenAICompatibleClient
+
+        return OpenAICompatibleClient(
+            base_url="http://unused", api_key="k", model="m", **kw
+        )
+
+    async def test_it_is_sent_once_not_three_times(self) -> None:
+        import asyncio
+
+        from freetcoder.llm import LLMError
+
+        client = self._client(timeout_s=0.05, max_retries=3)
+        calls = 0
+
+        async def never(**kwargs):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(30)
+
+        client._client.chat.completions.create = never  # type: ignore[method-assign]
+
+        with pytest.raises(LLMError) as caught:
+            await client.complete_text(system="s", user="u")
+        assert calls == 1, f"the deadline was spent {calls} times over"
+        assert "did not answer within" in str(caught.value)
+
+    async def test_a_transient_failure_is_still_retried(self) -> None:
+        """The loop was written for this case and keeps it: a provider that is
+        momentarily unable deserves another go, unlike one that is simply too
+        slow for the budget."""
+        from types import SimpleNamespace
+
+        client = self._client(timeout_s=5, max_retries=3)
+        calls = 0
+
+        async def flaky(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                # Empty choices is the shape a 5xx or a pool error arrives in;
+                # complete_text turns it into a retryable LLMError.
+                return SimpleNamespace(choices=[], usage=None)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        client._client.chat.completions.create = flaky  # type: ignore[method-assign]
+        assert await client.complete_text(system="s", user="u") == "ok"
+        assert calls == 3
+
+    async def test_the_retry_hook_reports_each_re_send(self) -> None:
+        from freetcoder.llm import LLMError
+
+        client = self._client(timeout_s=5, max_retries=3)
+        said: list[str] = []
+        client.on_retry = said.append
+        calls = 0
+
+        async def always_empty(**kwargs):
+            nonlocal calls
+            calls += 1
+            from types import SimpleNamespace
+
+            return SimpleNamespace(choices=[], usage=None)
+
+        client._client.chat.completions.create = always_empty  # type: ignore[method-assign]
+        with pytest.raises(LLMError):
+            await client.complete_text(system="s", user="u")
+        assert calls == 3, "a retryable failure must still be retried"
+        assert len(said) == 2, "reported between attempts, not after the last"
+        assert "asking again (2 of 3)" in said[0]
+
+    async def test_no_hook_is_safe(self) -> None:
+        from freetcoder.llm import LLMError
+
+        client = self._client(timeout_s=5, max_retries=2)
+
+        async def always_empty(**kwargs):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(choices=[], usage=None)
+
+        client._client.chat.completions.create = always_empty  # type: ignore[method-assign]
+        with pytest.raises(LLMError):
+            await client.complete_text(system="s", user="u")
