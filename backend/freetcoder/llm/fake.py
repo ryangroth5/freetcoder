@@ -15,6 +15,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from . import telemetry
 from .base import LLMError
 
 M = TypeVar("M", bound=BaseModel)
@@ -99,6 +100,16 @@ class FakeLLM:
     async def complete_json(
         self, *, system: str, user: str, schema: type[M], temperature: float = 0.7
     ) -> M:
+        with telemetry.record("offline", "json_schema") as entry:
+            entry.prompt = f"{system}\n\n---\n\n{user}"
+            result = await self._complete_json(system=system, user=user, schema=schema)
+            entry.served_by = "recorded fixture"
+            entry.ttft_s = 0.0
+            entry.tokens_streamed = 1
+            entry.reply = result.model_dump_json(indent=2)
+        return result
+
+    async def _complete_json(self, *, system: str, user: str, schema: type[M]) -> M:
         self.calls.append((system, user))
         if not self._queue and self._cycle and self._original:
             self._queue = list(self._original)
@@ -117,6 +128,18 @@ class FakeLLM:
     async def complete_text(
         self, *, system: str, user: str, temperature: float = 0.7
     ) -> str:
+        # Recorded like a real call, so offline mode shows the inspector with
+        # something in it rather than an empty panel that looks broken.
+        with telemetry.record("offline", "text") as entry:
+            entry.prompt = f"{system}\n\n---\n\n{user}"
+            reply = await self._complete_text(system=system, user=user)
+            entry.served_by = "recorded fixture"
+            entry.ttft_s = 0.0
+            entry.tokens_streamed = 1
+            entry.reply = reply
+        return reply
+
+    async def _complete_text(self, *, system: str, user: str) -> str:
         self.calls.append((system, user))
         if self._text_for is not None:
             return self._text_for(system, user)

@@ -19,3 +19,22 @@ export function readDefaultLanguage(): Language {
   }
   return 'python'
 }
+
+export const INSPECTOR_OPEN_KEY = 'freetcoder.inspectorOpen'
+
+/** Whether the generation inspector was left open. Closed unless chosen. */
+export function readInspectorOpen(): boolean {
+  try {
+    return localStorage.getItem(INSPECTOR_OPEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function writeInspectorOpen(open: boolean): void {
+  try {
+    localStorage.setItem(INSPECTOR_OPEN_KEY, open ? '1' : '0')
+  } catch {
+    // Not being able to remember it is harmless.
+  }
+}

@@ -27,7 +27,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from ..llm import LLMClient, LLMError
+from ..llm import LLMClient, LLMError, telemetry
 from ..models import GateOutcome, GateReport, GeneratedQuestion, Language, TestCase
 from ..progress import NULL_REPORTER, Reporter
 from ..runner import Limits, Verdict, get_adapter, run_source
@@ -141,12 +141,13 @@ async def check_statement_sufficiency(
 
     report_to("solving the question from the statement alone")
     try:
-        attempt = await client.complete_json(
-            system=SOLVER_SYSTEM,
-            user=build_solver_prompt(q, language),
-            schema=CandidateSolution,
-            temperature=0.2,
-        )
+        with telemetry.stage("sufficiency"):
+            attempt = await client.complete_json(
+                system=SOLVER_SYSTEM,
+                user=build_solver_prompt(q, language),
+                schema=CandidateSolution,
+                temperature=0.2,
+            )
     except LLMError as exc:
         # Inconclusive, not failing: a provider problem is not the question's
         # fault, and rejecting a good question over it would be worse.

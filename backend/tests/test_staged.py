@@ -172,9 +172,11 @@ class TestTelemetry:
         with telemetry.collecting() as run:
             await generate_staged(llm, config(), rng=random.Random(0))
 
-        # FakeLLM does not go through the real client, so no provider records
-        # are produced -- the labels are what a live run would attribute time to.
-        assert run.calls == []
+        # The fake records its calls now (so offline mode can be inspected),
+        # which lets this assert what it is named for: every call is attributed
+        # to a stage rather than filed as "unlabelled".
+        assert run.calls, "no calls were recorded"
+        assert all(c.stage for c in run.calls), [c.stage for c in run.calls]
 
 
 @pytest.mark.parametrize("missing", ["statement", "reference", "constraints"])

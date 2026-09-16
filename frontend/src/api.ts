@@ -232,6 +232,29 @@ export interface ProgressRun {
   /** Of `elapsed`, how much was spent waiting on the provider. Our own share
    *  is about two seconds, so this is very nearly all of it. */
   provider_seconds: number
+  /** Every model call the run made, the running one included. */
+  calls?: ProgressCall[]
+}
+
+/** One model call, as the inspection panel shows it. */
+export interface ProgressCall {
+  stage: string
+  model: string
+  served_by: string
+  mode: string
+  seconds: number
+  /** Null until the first token: a stalled call is a TTFT that stays null. */
+  ttft_s: number | null
+  tokens_streamed: number
+  tokens_per_s: number
+  longest_gap_s: number
+  outcome: 'running' | 'ok' | 'stalled' | 'timeout' | 'error' | 'fell_back'
+  error: string
+  in_flight: boolean
+  prompt: string
+  reply: string
+  prompt_tokens: number
+  completion_tokens: number
 }
 
 export interface ChatMessage {

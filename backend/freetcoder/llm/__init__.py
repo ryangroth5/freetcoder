@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Literal
 
 from ..settings import Settings, get_settings
-from .base import LLMClient, LLMError, LLMTimeout
+from .base import LLMClient, LLMError, LLMStalled, LLMTimeout
 from .client import OpenAICompatibleClient
 from .fake import FakeLLM, ToolCall
 
@@ -15,6 +15,7 @@ __all__ = [
     "FakeLLM",
     "LLMClient",
     "LLMError",
+    "LLMStalled",
     "LLMTimeout",
     "LlmStatus",
     "OpenAICompatibleClient",
@@ -85,6 +86,9 @@ def build_client(settings: Settings | None = None) -> LLMClient:
         model=s.llm_model,
         timeout_s=s.llm_timeout_s,
         max_retries=s.llm_max_retries,
+        first_token_s=s.llm_first_token_s,
+        idle_s=s.llm_idle_s,
+        fallback_model=s.llm_fallback_model,
     )
 
 

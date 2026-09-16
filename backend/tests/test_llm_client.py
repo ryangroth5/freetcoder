@@ -243,3 +243,188 @@ class TestATimeoutIsNotRetried:
         client._client.chat.completions.create = always_empty  # type: ignore[method-assign]
         with pytest.raises(LLMError):
             await client.complete_text(system="s", user="u")
+
+
+# --------------------------------------------------------------- streaming
+def _chunk(content: str = "", reasoning: str = "", *, provider: str = "", usage=None):
+    """A streamed chunk shaped like the OpenAI SDK's, extras included."""
+    from types import SimpleNamespace
+
+    delta = SimpleNamespace(
+        content=content or None,
+        model_extra={"reasoning": reasoning} if reasoning else {},
+    )
+    return SimpleNamespace(
+        choices=[SimpleNamespace(delta=delta)] if (content or reasoning) else [],
+        usage=usage,
+        model_extra={"provider": provider} if provider else {},
+    )
+
+
+class _Stream:
+    """An async stream of (delay_before, chunk) pairs."""
+
+    def __init__(self, script):
+        self._script = list(script)
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        import asyncio
+
+        if not self._script:
+            raise StopAsyncIteration
+        delay, chunk = self._script.pop(0)
+        await asyncio.sleep(delay)
+        return chunk
+
+    async def close(self):
+        self.closed = True
+
+
+class TestStreamingDetectsAStallEarly:
+    """A non-streamed call gives no signal until it is finished, so a stuck
+    model and a busy one looked identical for the full 300s. Streamed, a model
+    that is working shows it within seconds."""
+
+    def _client(self, **kw):
+        from freetcoder.llm.client import OpenAICompatibleClient
+
+        opts = {"timeout_s": 5.0, "max_retries": 1, "first_token_s": 0.2, "idle_s": 0.2}
+        opts.update(kw)
+        return OpenAICompatibleClient(base_url="http://unused", api_key="k", model="m", **opts)
+
+    def _serve(self, client, *streams):
+        queue = list(streams)
+        sent: list[dict] = []
+
+        async def create(**kwargs):
+            sent.append(kwargs)
+            return queue.pop(0)
+
+        client._client.chat.completions.create = create  # type: ignore[method-assign]
+        return sent
+
+    async def test_no_first_token_is_a_stall_not_a_timeout(self) -> None:
+        import time
+
+        from freetcoder.llm import LLMStalled
+
+        client = self._client()
+        self._serve(client, _Stream([(3.0, _chunk("late"))]))
+        started = time.monotonic()
+        with pytest.raises(LLMStalled) as caught:
+            await client.complete_text(system="s", user="u")
+        assert time.monotonic() - started < 1.0, "should give up at the first-token window"
+        assert "no tokens from m" in str(caught.value)
+
+    async def test_a_steady_stream_runs_past_the_first_token_window(self) -> None:
+        """Only silence is punished. A reply that keeps arriving may take as
+        long as the overall deadline allows."""
+        client = self._client()
+        script = [(0.05, _chunk("tok ")) for _ in range(12)]  # ~0.6s total
+        sent = self._serve(client, _Stream(script))
+        assert await client.complete_text(system="s", user="u") == "tok " * 12
+        assert sent[0]["stream"] is True
+
+    async def test_silence_mid_reply_is_a_stall(self) -> None:
+        from freetcoder.llm import LLMStalled
+
+        client = self._client()
+        self._serve(client, _Stream([(0.0, _chunk("start")), (3.0, _chunk("end"))]))
+        with pytest.raises(LLMStalled) as caught:
+            await client.complete_text(system="s", user="u")
+        assert "went silent" in str(caught.value)
+
+    async def test_reasoning_tokens_count_as_alive(self) -> None:
+        """Thinking models emit reasoning long before any content."""
+        client = self._client()
+        script = [(0.1, _chunk(reasoning="hmm")) for _ in range(5)] + [(0.1, _chunk("done"))]
+        self._serve(client, _Stream(script))
+        assert await client.complete_text(system="s", user="u") == "done"
+
+    async def test_the_stream_is_closed_when_abandoned(self) -> None:
+        from freetcoder.llm import LLMStalled
+
+        client = self._client()
+        stream = _Stream([(0.0, _chunk("a")), (3.0, _chunk("b"))])
+        self._serve(client, stream)
+        with pytest.raises(LLMStalled):
+            await client.complete_text(system="s", user="u")
+        assert stream.closed
+
+    async def test_the_record_says_what_happened(self) -> None:
+        from freetcoder.llm import telemetry
+
+        client = self._client()
+        self._serve(client, _Stream([
+            (0.05, _chunk("hel", provider="Groq")), (0.05, _chunk("lo")),
+        ]))
+        with telemetry.collecting() as calls:
+            await client.complete_text(system="sys", user="ask")
+        view = calls.calls[0].view()
+        assert view["outcome"] == "ok" and view["served_by"] == "Groq"
+        assert view["reply"] == "hello" and "ask" in view["prompt"]
+        assert view["ttft_s"] is not None and view["tokens_streamed"] == 2
+        assert view["in_flight"] is False
+
+
+class TestTheFallbackModel:
+    def _client(self, **kw):
+        from freetcoder.llm.client import OpenAICompatibleClient
+
+        opts = {"timeout_s": 5.0, "max_retries": 1, "first_token_s": 0.2,
+                "idle_s": 0.2, "fallback_model": "backup"}
+        opts.update(kw)
+        return OpenAICompatibleClient(base_url="http://unused", api_key="k", model="main", **opts)
+
+    async def test_a_stall_switches_to_the_fallback_once(self) -> None:
+        from freetcoder.llm import telemetry
+
+        client = self._client()
+        said: list[str] = []
+        client.on_retry = said.append
+        streams = [_Stream([(3.0, _chunk("never"))]), _Stream([(0.0, _chunk("saved"))])]
+        models: list[str] = []
+
+        async def create(**kwargs):
+            models.append(kwargs["model"])
+            return streams.pop(0)
+
+        client._client.chat.completions.create = create  # type: ignore[method-assign]
+        with telemetry.collecting() as calls:
+            assert await client.complete_text(system="s", user="u") == "saved"
+        assert models == ["main", "backup"]
+        assert any("switching to backup" in m and "no tokens from main" in m for m in said)
+        assert [c.outcome for c in calls.calls] == ["stalled", "ok"]
+
+    async def test_no_fallback_configured_means_no_switch(self) -> None:
+        from freetcoder.llm import LLMStalled
+
+        client = self._client(fallback_model="")
+        count = 0
+
+        async def create(**kwargs):
+            nonlocal count
+            count += 1
+            return _Stream([(3.0, _chunk("never"))])
+
+        client._client.chat.completions.create = create  # type: ignore[method-assign]
+        with pytest.raises(LLMStalled):
+            await client.complete_text(system="s", user="u")
+        assert count == 1
+
+    async def test_the_fallback_failing_too_surfaces_its_error(self) -> None:
+        from freetcoder.llm import LLMStalled
+
+        client = self._client()
+
+        async def create(**kwargs):
+            return _Stream([(3.0, _chunk("never"))])
+
+        client._client.chat.completions.create = create  # type: ignore[method-assign]
+        with pytest.raises(LLMStalled) as caught:
+            await client.complete_text(system="s", user="u")
+        assert "backup" in str(caught.value), "the second failure is the one reported"

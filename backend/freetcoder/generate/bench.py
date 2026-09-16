@@ -79,6 +79,7 @@ def _client(model: str | None) -> LLMClient:
     return OpenAICompatibleClient(
         base_url=settings.llm_base_url, api_key=settings.llm_api_key, model=model,
         timeout_s=settings.llm_timeout_s, max_retries=settings.llm_max_retries,
+        first_token_s=settings.llm_first_token_s, idle_s=settings.llm_idle_s,
     )
 
 

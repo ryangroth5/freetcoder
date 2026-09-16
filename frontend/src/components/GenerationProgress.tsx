@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { ProgressRun, ProgressStep } from '../api'
+import { CallInspector } from './CallInspector'
 
 const POLL_MS = 900
 const TICK_MS = 100
@@ -145,6 +146,8 @@ export function GenerationProgress({ runId, onCancelled }: {
       <p className="mt-3 text-xs text-[var(--color-muted)]">
         Every question is executed against its own tests before you see it.
       </p>
+
+      <CallInspector calls={run?.calls ?? []} />
     </div>
   )
 }

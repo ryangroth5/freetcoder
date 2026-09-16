@@ -32,6 +32,50 @@ class CallRecord:
     completion_tokens: int = 0
     #: Empty when the call succeeded.
     error: str = ""
+    #: The upstream that actually answered, when the gateway says (OpenRouter
+    #: routes one slug across several providers).
+    served_by: str = ""
+    #: Seconds until the first content or reasoning token. None until one
+    #: arrives, which is exactly what a stalled call looks like.
+    ttft_s: float | None = None
+    #: Deltas received so far -- a rough token count, live while streaming.
+    tokens_streamed: int = 0
+    #: The longest silence between two deltas.
+    longest_gap_s: float = 0.0
+    #: ok | stalled | timeout | error | fell_back, or "running".
+    outcome: str = "running"
+    #: The exact request and reply, for the inspector. Memory only.
+    prompt: str = ""
+    reply: str = ""
+    started: float = field(default_factory=time.monotonic)
+    in_flight: bool = True
+
+    def view(self, max_text: int = 50_000) -> dict[str, object]:
+        """What the browser's inspection panel shows."""
+        age = (time.monotonic() - self.started) if self.in_flight else self.seconds
+        rate = (
+            self.tokens_streamed / max(0.001, age - (self.ttft_s or 0.0))
+            if self.ttft_s is not None and self.tokens_streamed
+            else 0.0
+        )
+        return {
+            "stage": self.stage or "unlabelled",
+            "model": self.model,
+            "served_by": self.served_by,
+            "mode": self.mode,
+            "seconds": round(age, 2),
+            "ttft_s": None if self.ttft_s is None else round(self.ttft_s, 2),
+            "tokens_streamed": self.tokens_streamed,
+            "tokens_per_s": round(rate, 1),
+            "longest_gap_s": round(self.longest_gap_s, 2),
+            "outcome": self.outcome,
+            "error": self.error,
+            "in_flight": self.in_flight,
+            "prompt": self.prompt[:max_text],
+            "reply": self.reply[:max_text],
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+        }
 
     @property
     def ok(self) -> bool:
@@ -108,14 +152,21 @@ def record(model: str, mode: str) -> Iterator[CallRecord]:
     record is yielded so the caller can fill in token counts from the response.
     """
     entry = CallRecord(model=model, stage=_stage.get(), mode=mode, seconds=0.0)
-    started = time.monotonic()
+    started = entry.started
+    # Filed at the start, not the end, so an inspector can watch a call that
+    # has not answered yet -- the case worth inspecting.
+    collector = _collector.get()
+    if collector is not None:
+        collector.add(entry)
     try:
         yield entry
+        if entry.outcome == "running":
+            entry.outcome = "ok"
     except Exception as exc:
         entry.error = f"{type(exc).__name__}: {exc}"[:200]
+        if entry.outcome == "running":
+            entry.outcome = "error"
         raise
     finally:
         entry.seconds = time.monotonic() - started
-        collector = _collector.get()
-        if collector is not None:
-            collector.add(entry)
+        entry.in_flight = False

@@ -795,3 +795,35 @@ a line in the log rather than a silent minute.
 The lesson generalises past this bug: **a retry that reports nothing is
 indistinguishable from a hang**, and retry budgets at different layers need to
 be read as a product rather than one at a time.
+
+## Seeing a stall while it happens
+
+A run sat at `writing question 1 — first try` for 300 seconds and then reported
+*"the model did not answer: no text response"*. Nothing could have said so
+sooner, because generation calls were **not streamed**: no bytes exist until a
+non-streamed reply is complete, so a model that is generating and one that is
+stuck look identical for the whole deadline. Only the tutor streamed.
+
+Generation calls now stream, with three clocks instead of one:
+
+| clock | default | trips when |
+|---|---|---|
+| `llm_first_token_s` | 30s | no content or reasoning token has arrived |
+| `llm_idle_s` | 60s | tokens were flowing and then stopped |
+| `llm_timeout_s` | 300s | the whole call, however lively |
+
+Reasoning tokens count as alive — thinking models emit them long before any
+content. Gateway keep-alive comments do not: they prove the connection, not
+generation. A stall raises `LLMStalled`, which like any timeout is not re-sent
+identically. An endpoint that refuses `stream=True`, or ignores it and answers
+whole, still works.
+
+`llm_fallback_model` names a second model on the same endpoint, tried once when
+the first stalls or fails; the progress log says so (`no tokens from X in 30s —
+switching to Y`).
+
+Every call is recorded from the moment it starts — model, the upstream that
+actually served it, time to first token, tokens streamed, the longest silence,
+the outcome, and the exact prompt and reply — and the progress run exposes them
+to a closed-by-default **Inspect model calls** panel under the generation log.
+It is memory only and leaves with the run.

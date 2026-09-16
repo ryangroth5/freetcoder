@@ -307,3 +307,45 @@ class TestTheLogSaysWhereTheTimeWent:
         from freetcoder.progress import NULL_REPORTER
 
         assert NULL_REPORTER.elapsed == 0.0
+
+
+class TestTheInspectorSeesEveryCall:
+    """A stalled call is the one worth inspecting, so records are visible from
+    the moment a call starts, not only once it returns."""
+
+    def test_an_in_flight_call_is_visible(self) -> None:
+        from freetcoder.llm import telemetry
+        from freetcoder.progress import ProgressRegistry
+
+        reg = ProgressRegistry()
+        reg.start("r")
+        with telemetry.collecting() as calls:
+            reg.attach("r", calls)
+            with telemetry.record("m", "text") as entry:
+                entry.prompt = "the ask"
+                view = reg.inspect("r")
+                assert view is not None
+                assert len(view.calls) == 1
+                assert view.calls[0]["in_flight"] is True
+                assert view.calls[0]["outcome"] == "running"
+        done = reg.inspect("r")
+        assert done is not None and done.calls[0]["outcome"] == "ok"
+
+    def test_text_is_capped(self) -> None:
+        from freetcoder.llm.telemetry import CallRecord
+
+        rec = CallRecord(model="m", stage="", mode="text", seconds=0.0,
+                         reply="x" * 200_000)
+        assert len(str(rec.view()["reply"])) == 50_000
+
+    def test_calls_go_when_the_run_is_evicted(self) -> None:
+        from freetcoder.llm import telemetry
+        from freetcoder.progress import ProgressRegistry
+
+        reg = ProgressRegistry(ttl=0.0)
+        reg.start("r")
+        with telemetry.collecting() as calls:
+            reg.attach("r", calls)
+        reg.finish("r", "accepted")
+        reg.get("r")  # triggers eviction
+        assert "r" not in reg._calls

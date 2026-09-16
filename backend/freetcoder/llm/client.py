@@ -9,9 +9,11 @@ good enough for step one, but a local Ollama build often is not.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 
@@ -19,7 +21,7 @@ from openai import APIError, AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
 from . import telemetry
-from .base import LLMError, LLMTimeout
+from .base import LLMError, LLMStalled, LLMTimeout
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +58,9 @@ class OpenAICompatibleClient:
         model: str,
         timeout_s: float = 120.0,
         max_retries: int = 3,
+        first_token_s: float = 30.0,
+        idle_s: float = 60.0,
+        fallback_model: str = "",
     ) -> None:
         self._client = AsyncOpenAI(
             base_url=base_url, api_key=api_key or "unset", timeout=timeout_s, max_retries=0
@@ -74,6 +79,9 @@ class OpenAICompatibleClient:
         #: a retry that reports nothing is a silent minute -- and three of them
         #: is what made one step sit at 677 seconds with nothing to read.
         self.on_retry: Callable[[str], None] | None = None
+        self._first_token_s = first_token_s
+        self._idle_s = idle_s
+        self._fallback = fallback_model.strip()
 
     def _retrying(self, exc: Exception, attempt: int, of: int) -> None:
         log.warning("request failed (attempt %d/%d): %s", attempt, of, exc)
@@ -92,8 +100,191 @@ class OpenAICompatibleClient:
                 f"the provider did not answer within {self._deadline_s:.0f}s"
             ) from exc
 
+
+    def _say(self, message: str) -> None:
+        log.warning("%s", message)
+        if self.on_retry is not None:
+            self.on_retry(message)
+
+    async def _stream(
+        self, kwargs: dict[str, Any], entry: telemetry.CallRecord
+    ) -> str:
+        """One call, streamed, with three clocks.
+
+        The non-streaming request this replaces produced no bytes until the
+        whole reply was done, so a model that was generating and one that was
+        stuck looked identical for the full deadline. Streamed, the difference
+        shows within seconds:
+
+        - no content *or reasoning* token within `first_token_s` -> stalled.
+          Reasoning counts: thinking models emit it long before content.
+          Gateway keep-alive comments do not -- they prove the connection, not
+          generation, and the SDK drops them before we see them anyway;
+        - silence longer than `idle_s` once tokens are flowing -> stalled;
+        - the whole call past `timeout_s` -> timed out.
+        """
+        model = kwargs["model"]
+        started = time.monotonic()
+        deadline = started + self._deadline_s
+        last = started
+
+        def window() -> float:
+            now = time.monotonic()
+            budget = (
+                (started + self._first_token_s) - now
+                if entry.ttft_s is None
+                else self._idle_s
+            )
+            return max(0.0, min(budget, deadline - now))
+
+        def stalled() -> LLMError:
+            now = time.monotonic()
+            # Whichever window was the binding one. Compared with a little
+            # slack: asyncio wakes a hair early or late, and a first-token
+            # window that happens to end at the deadline is a timeout.
+            first_token_end = started + self._first_token_s
+            binding = (
+                first_token_end if entry.ttft_s is None else last + self._idle_s
+            )
+            if now >= deadline - 0.01 or deadline <= binding:
+                entry.outcome = "timeout"
+                return LLMTimeout(
+                    f"the provider did not answer within {self._deadline_s:.0f}s"
+                )
+            entry.outcome = "stalled"
+            if entry.ttft_s is None:
+                return LLMStalled(
+                    f"no tokens from {model} in {self._first_token_s:.0f}s"
+                )
+            return LLMStalled(
+                f"{model} went silent for {self._idle_s:.0f}s mid-reply"
+            )
+
+        try:
+            stream = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    **kwargs, stream=True, stream_options={"include_usage": True}
+                ),
+                timeout=window(),
+            )
+        except TimeoutError as exc:
+            raise stalled() from exc
+        except APIError as exc:
+            # Endpoints that cannot stream reject the parameter outright. Only
+            # then fall back to one whole reply -- a 429 or a 5xx is not a
+            # reason to send the request a second time.
+            if getattr(exc, "status_code", None) not in (400, 404, 415, 422, 501):
+                raise
+            log.info("streaming refused (%s); asking for a whole reply", exc)
+            return await self._whole(kwargs, entry)
+
+        if not hasattr(stream, "__aiter__"):
+            # Some OpenAI-compatible servers ignore `stream` and answer with one
+            # whole completion. Take it as it came.
+            return self._absorb(stream, entry, started)
+
+        text: list[str] = []
+        iterator = stream.__aiter__()
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(iterator.__anext__(), timeout=window())
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as exc:
+                    raise stalled() from exc
+
+                extra = getattr(chunk, "model_extra", None) or {}
+                if extra.get("provider") and not entry.served_by:
+                    entry.served_by = str(extra["provider"])
+                if extra.get("error"):
+                    entry.outcome = "error"
+                    raise LLMError(f"provider error mid-stream: {extra['error']}")
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                    entry.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                dextra = getattr(delta, "model_extra", None) or {}
+                content = delta.content or ""
+                thinking = (
+                    dextra.get("reasoning") or dextra.get("reasoning_content") or ""
+                )
+                if not content and not thinking:
+                    continue
+                now = time.monotonic()
+                if entry.ttft_s is None:
+                    entry.ttft_s = now - started
+                else:
+                    entry.longest_gap_s = max(entry.longest_gap_s, now - last)
+                last = now
+                entry.tokens_streamed += 1
+                if content:
+                    text.append(content)
+                    entry.reply += content
+        finally:
+            with contextlib.suppress(Exception):
+                await stream.close()
+        return "".join(text)
+
+    async def _whole(
+        self, kwargs: dict[str, Any], entry: telemetry.CallRecord
+    ) -> str:
+        """One non-streamed reply, for endpoints that refuse to stream."""
+        started = time.monotonic()
+        return self._absorb(await self._ask(**kwargs), entry, started)
+
+    @staticmethod
+    def _absorb(resp: Any, entry: telemetry.CallRecord, started: float) -> str:
+        entry.ttft_s = time.monotonic() - started
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            entry.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        extra = getattr(resp, "model_extra", None) or {}
+        if extra.get("provider"):
+            entry.served_by = str(extra["provider"])
+        choices = getattr(resp, "choices", None)
+        if not choices:
+            detail = getattr(resp, "error", None) or "no choices in response"
+            raise LLMError(f"provider returned no completion: {detail}")
+        content = str(choices[0].message.content or "")
+        entry.reply = content
+        entry.tokens_streamed = 1 if content else 0
+        return content
+
+    async def _with_fallback(self, call: Callable[[str], Any]) -> Any:
+        """Try the configured model, then the fallback once.
+
+        Same endpoint and key, a different model: it covers a stalled model or
+        a bad provider route, which is what actually happens, without a second
+        credential to manage.
+        """
+        try:
+            return await call(self._model)
+        except LLMError as exc:
+            if not self._fallback or self._fallback == self._model:
+                raise
+            self._say(f"{exc} — switching to {self._fallback}")
+            return await call(self._fallback)
+
     async def complete_json(
         self, *, system: str, user: str, schema: type[M], temperature: float = 0.7
+    ) -> M:
+        async def attempt(model: str) -> M:
+            return await self._complete_json(
+                model=model, system=system, user=user, schema=schema,
+                temperature=temperature,
+            )
+
+        result: M = await self._with_fallback(attempt)
+        return result
+
+    async def _complete_json(
+        self, *, model: str, system: str, user: str, schema: type[M],
+        temperature: float,
     ) -> M:
         last: Exception | None = None
         # max(1, ...) because these are *retries*: zero of them still means one
@@ -116,7 +307,7 @@ class OpenAICompatibleClient:
             # old rule was really aiming at.
             mode = "json_schema"
             try:
-                raw = await self._request(system, user, schema, temperature, mode)
+                raw = await self._request(system, user, schema, temperature, mode, model)
                 return schema.model_validate_json(_extract_json(raw))
             except ValidationError as exc:
                 last = exc
@@ -155,42 +346,47 @@ class OpenAICompatibleClient:
         self, *, system: str, user: str, temperature: float = 0.7
     ) -> str:
         """A plain reply, with no response_format at all."""
+
+        async def attempt(model: str) -> str:
+            return await self._complete_text(
+                model=model, system=system, user=user, temperature=temperature
+            )
+
+        result: str = await self._with_fallback(attempt)
+        return result
+
+    async def _complete_text(
+        self, *, model: str, system: str, user: str, temperature: float
+    ) -> str:
         last: Exception | None = None
         tries = max(1, self._max_retries)
-        for attempt in range(1, tries + 1):
+        for n in range(1, tries + 1):
             try:
-                with telemetry.record(self._model, "text") as entry:
-                    resp = await self._ask(
-                        model=self._model,
-                        temperature=temperature,
-                        messages=[
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ],
+                with telemetry.record(model, "text") as entry:
+                    entry.prompt = f"{system}\n\n---\n\n{user}"
+                    content = await self._stream(
+                        {
+                            "model": model,
+                            "temperature": temperature,
+                            "messages": [
+                                {"role": "system", "content": system},
+                                {"role": "user", "content": user},
+                            ],
+                        },
+                        entry,
                     )
-                    usage = getattr(resp, "usage", None)
-                    if usage is not None:
-                        entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                        entry.completion_tokens = (
-                            getattr(usage, "completion_tokens", 0) or 0
-                        )
-                choices = getattr(resp, "choices", None)
-                if not choices:
-                    detail = getattr(resp, "error", None) or "no choices in response"
-                    raise LLMError(f"provider returned no completion: {detail}")
-                content = choices[0].message.content
-                if not content or not content.strip():
-                    raise LLMError("empty response from provider")
-                return str(content)
+                    if not content.strip():
+                        raise LLMError("empty response from provider")
+                return content
             except LLMTimeout:
                 # Not retried here. The caller's own loop can vary the prompt;
                 # this one can only re-send the identical request that already
-                # exhausted a full deadline.
+                # went quiet.
                 raise
             except (APIError, LLMError) as exc:
                 last = exc
-                if attempt < tries:
-                    self._retrying(exc, attempt, tries)
+                if n < tries:
+                    self._retrying(exc, n, tries)
         raise LLMError(f"no text response: {last}") from last
 
     async def complete_json_with_tools(
@@ -393,10 +589,11 @@ class OpenAICompatibleClient:
             yield {"type": "error", "message": f"the tutor is unavailable: {exc}"}
 
     async def _request(
-        self, system: str, user: str, schema: type[M], temperature: float, mode: str
+        self, system: str, user: str, schema: type[M], temperature: float,
+        mode: str, model: str,
     ) -> str:
         kwargs: dict[str, Any] = {
-            "model": self._model,
+            "model": model,
             "temperature": temperature,
             "messages": [
                 {"role": "system", "content": system},
@@ -415,33 +612,21 @@ class OpenAICompatibleClient:
         else:
             kwargs["response_format"] = {"type": "json_object"}
 
-        with telemetry.record(self._model, mode) as entry:
+        with telemetry.record(model, mode) as entry:
+            entry.prompt = f"{system}\n\n---\n\n{user}"
             try:
-                resp = await self._ask(**kwargs)
-            except APIError:
-                if mode != "json_schema":
+                content = await self._stream(kwargs, entry)
+            except APIError as exc:
+                if mode != "json_schema" or getattr(exc, "status_code", None) not in (
+                    400, 404, 415, 422, 501,
+                ):
                     raise
                 # Endpoint does not support json_schema at all: retry
                 # unconstrained rather than burning the attempt.
                 kwargs["response_format"] = {"type": "json_object"}
                 entry.mode = "json_object"
-                resp = await self._ask(**kwargs)
-
-            usage = getattr(resp, "usage", None)
-            if usage is not None:
-                entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                entry.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-
-        # An OpenAI-compatible gateway can answer 200 with an error payload and
-        # no `choices` at all -- rate limits and upstream provider failures both
-        # look like this. Indexing it blind turned that into a TypeError deep in
-        # the stack instead of something a caller could report.
-        choices = getattr(resp, "choices", None)
-        if not choices:
-            detail = getattr(resp, "error", None) or "no choices in response"
-            raise LLMError(f"provider returned no completion: {detail}")
-
-        content = choices[0].message.content
-        if not content:
-            raise LLMError("empty response from provider")
-        return str(content)
+                entry.reply = ""
+                content = await self._stream(kwargs, entry)
+            if not content:
+                raise LLMError("empty response from provider")
+        return content

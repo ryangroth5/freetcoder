@@ -26,6 +26,9 @@ SETTABLE: frozenset[str] = frozenset({
     "llm_model",
     "llm_timeout_s",
     "llm_max_retries",
+    "llm_first_token_s",
+    "llm_idle_s",
+    "llm_fallback_model",
     "generation_attempts",
     "repair_rounds",
     "tool_call_budget",
@@ -65,6 +68,16 @@ class Settings(BaseSettings):
     #: and the module strategy's own per-stage tries, which are separate
     #: budgets that no one layer can see.
     llm_max_retries: int = 3
+
+    #: Generation calls stream, so a stuck model is visible early: no content
+    #: or reasoning token within this many seconds and the call is abandoned
+    #: rather than waited on for the full `llm_timeout_s`.
+    llm_first_token_s: float = 30.0
+    #: Silence allowed *between* tokens once a reply has started.
+    llm_idle_s: float = 60.0
+    #: A second model on the same endpoint, tried once when the first stalls,
+    #: times out or keeps failing. Empty disables it.
+    llm_fallback_model: str = ""
 
     #: Empty path means in-memory: the container has no persistent filesystem
     #: unless the user opts into a volume.

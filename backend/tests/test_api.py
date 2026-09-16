@@ -839,3 +839,31 @@ class TestTheProgressLogAccountsForTheTime:
         assert "waiting on the model" in summary
         assert "checking it" in summary
         assert "provider_seconds" in body
+
+
+class TestTheProgressPayloadCarriesCalls:
+    async def test_offline_generation_is_inspectable(self, client: AsyncClient) -> None:
+        run_id = "inspect-1"
+        resp = await client.post(
+            "/api/sessions", json={"style": "leetcode", "progress_id": run_id}
+        )
+        assert resp.status_code == 200, resp.text
+        body = (await client.get(f"/api/progress/{run_id}")).json()
+        assert body["calls"], "the inspector would be empty"
+        call = body["calls"][0]
+        assert call["prompt"] and call["reply"]
+        assert call["outcome"] == "ok" and call["served_by"] == "recorded fixture"
+
+
+class TestEverySettableFieldCanBeSaved:
+    """`SETTABLE` and the update model are two lists that must agree. They did
+    not: `generation_strategy` was settable in principle and rejected with a
+    422 by `extra="forbid"` in practice, so the Settings screen could show it
+    but never save it."""
+
+    def test_the_update_model_accepts_every_settable_field(self) -> None:
+        from freetcoder.api import SettingsPatch as SettingsUpdate
+        from freetcoder.settings import SETTABLE
+
+        missing = SETTABLE - set(SettingsUpdate.model_fields)
+        assert not missing, f"settable but unsaveable: {sorted(missing)}"

@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -77,6 +77,11 @@ class SettingsPatch(BaseModel):
     llm_model: str | None = Field(default=None, min_length=1, max_length=200)
     llm_timeout_s: float | None = Field(default=None, gt=0, le=600)
     llm_max_retries: int | None = Field(default=None, ge=0, le=10)
+    llm_first_token_s: float | None = Field(default=None, gt=0, le=600)
+    llm_idle_s: float | None = Field(default=None, gt=0, le=600)
+    # Empty is meaningful: it switches the fallback off.
+    llm_fallback_model: str | None = Field(default=None, max_length=200)
+    generation_strategy: Literal["module", "monolithic"] | None = None
     generation_attempts: int | None = Field(default=None, ge=1, le=10)
     repair_rounds: int | None = Field(default=None, ge=0, le=10)
     tool_call_budget: int | None = Field(default=None, ge=0, le=32)
@@ -411,6 +416,7 @@ async def create_session(request: Request, payload: CreateSessionRequest) -> dic
     # container logs with a stopwatch, which is what it took to find a single
     # call that ran for 857 seconds against a timeout that could not expire.
     with telemetry.collecting() as calls:
+        registry.attach(payload.progress_id, calls)
         try:
             obtained = await obtain_question(
                 store, client, config, 0,
@@ -776,7 +782,7 @@ async def get_progress(run_id: str) -> Run:
     a second of latency is irrelevant against an operation measured in tens of
     seconds.
     """
-    run = registry.get(run_id)
+    run = registry.inspect(run_id)
     if run is None:
         raise HTTPException(404, "no such run")
     return run

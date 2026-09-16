@@ -26,6 +26,16 @@ class LLMTimeout(LLMError):
     """
 
 
+
+class LLMStalled(LLMTimeout):
+    """The stream went quiet: no first token in time, or silence mid-reply.
+
+    Detectable long before the overall deadline, because a streamed call that
+    is generating shows it within seconds. The non-streaming calls this
+    replaced gave no signal at all until they finished, so a stuck model and a
+    busy one looked identical for the full 300s.
+    """
+
 class LLMClient(Protocol):
     """Anything that can turn a prompt into a validated pydantic model."""
 

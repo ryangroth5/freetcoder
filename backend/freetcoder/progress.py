@@ -18,7 +18,7 @@ import logging
 import threading
 import time
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -68,6 +68,10 @@ class Run(BaseModel):
     #: answered by reading container logs with a stopwatch. Measured, our own
     #: work is about two seconds: this is the number that says so.
     provider_seconds: float = 0.0
+    #: Every model call the run has made, including the one still running,
+    #: for the browser's inspection panel. Filled in on read from the
+    #: attached collector; memory only, and gone with the run.
+    calls: list[dict[str, Any]] = Field(default_factory=list)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -88,6 +92,9 @@ class ProgressRegistry:
 
     def __init__(self, ttl: float = RUN_TTL_SECONDS, max_runs: int = MAX_RUNS) -> None:
         self._runs: dict[str, Run] = {}
+        #: Live call records per run. Held beside the run rather than copied
+        #: into it, so a poll sees a call that is still streaming.
+        self._calls: dict[str, Any] = {}
         self._lock = threading.Lock()
         self._ttl = ttl
         self._max_runs = max_runs
@@ -155,10 +162,28 @@ class ProgressRegistry:
             run = self._runs.get(run_id)
             return bool(run and run.cancelled)
 
+    def attach(self, run_id: str | None, collector: Any) -> None:
+        """Let this run's reads include the calls `collector` is gathering."""
+        if not run_id:
+            return
+        with self._lock:
+            self._calls[run_id] = collector
+
     def get(self, run_id: str) -> Run | None:
         with self._lock:
             self._evict()
             return self._runs.get(run_id)
+
+    def inspect(self, run_id: str) -> Run | None:
+        """The run, with its model calls rendered for the inspection panel."""
+        with self._lock:
+            self._evict()
+            run = self._runs.get(run_id)
+            collector = self._calls.get(run_id)
+        if run is None:
+            return None
+        calls = [c.view() for c in collector.calls] if collector is not None else []
+        return run.model_copy(update={"calls": calls})
 
     def _evict(self) -> None:
         """Drop finished runs past their TTL, then the oldest if still over."""
@@ -169,11 +194,13 @@ class ProgressRegistry:
         ]
         for rid in stale:
             del self._runs[rid]
+            self._calls.pop(rid, None)
 
         if len(self._runs) > self._max_runs:
             oldest = sorted(self._runs.items(), key=lambda kv: kv[1].started_at)
             for rid, _ in oldest[: len(self._runs) - self._max_runs]:
                 del self._runs[rid]
+                self._calls.pop(rid, None)
 
 
 class Reporter:
