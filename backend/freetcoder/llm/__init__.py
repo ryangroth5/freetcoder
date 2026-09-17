@@ -89,6 +89,7 @@ def build_client(settings: Settings | None = None) -> LLMClient:
         first_token_s=s.llm_first_token_s,
         idle_s=s.llm_idle_s,
         fallback_model=s.llm_fallback_model,
+        reasoning_effort=s.llm_reasoning_effort,
     )
 
 

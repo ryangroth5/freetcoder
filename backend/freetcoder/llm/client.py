@@ -42,6 +42,17 @@ def _extract_json(text: str) -> str:
     return text
 
 
+def _usage_into(usage: Any, entry: telemetry.CallRecord) -> None:
+    """Token counts, including reasoning when the provider breaks it out."""
+    entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    entry.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    details = getattr(usage, "completion_tokens_details", None)
+    if isinstance(details, dict):
+        entry.reasoning_tokens = int(details.get("reasoning_tokens") or 0)
+    elif details is not None:
+        entry.reasoning_tokens = int(getattr(details, "reasoning_tokens", 0) or 0)
+
+
 class OpenAICompatibleClient:
     """Talks to any OpenAI-compatible endpoint."""
 
@@ -61,6 +72,7 @@ class OpenAICompatibleClient:
         first_token_s: float = 30.0,
         idle_s: float = 60.0,
         fallback_model: str = "",
+        reasoning_effort: str = "default",
     ) -> None:
         self._client = AsyncOpenAI(
             base_url=base_url, api_key=api_key or "unset", timeout=timeout_s, max_retries=0
@@ -82,6 +94,7 @@ class OpenAICompatibleClient:
         self._first_token_s = first_token_s
         self._idle_s = idle_s
         self._fallback = fallback_model.strip()
+        self._reasoning = reasoning_effort
 
     def _retrying(self, exc: Exception, attempt: int, of: int) -> None:
         log.warning("request failed (attempt %d/%d): %s", attempt, of, exc)
@@ -124,6 +137,10 @@ class OpenAICompatibleClient:
         - the whole call past `timeout_s` -> timed out.
         """
         model = kwargs["model"]
+        entry.reasoning_effort = self._reasoning
+        body = self._reasoning_body()
+        if body is not None:
+            kwargs = {**kwargs, "extra_body": {"reasoning": body}}
         started = time.monotonic()
         deadline = started + self._deadline_s
         last = started
@@ -202,8 +219,7 @@ class OpenAICompatibleClient:
                     raise LLMError(f"provider error mid-stream: {extra['error']}")
                 usage = getattr(chunk, "usage", None)
                 if usage is not None:
-                    entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                    entry.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                    _usage_into(usage, entry)
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -221,6 +237,8 @@ class OpenAICompatibleClient:
                     entry.longest_gap_s = max(entry.longest_gap_s, now - last)
                 last = now
                 entry.tokens_streamed += 1
+                if thinking and not content:
+                    entry.reasoning_streamed += 1
                 if content:
                     text.append(content)
                     entry.reply += content
@@ -228,6 +246,14 @@ class OpenAICompatibleClient:
             with contextlib.suppress(Exception):
                 await stream.close()
         return "".join(text)
+
+    def _reasoning_body(self) -> dict[str, Any] | None:
+        """OpenRouter's `reasoning` field, or None to leave the model alone."""
+        if self._reasoning == "default":
+            return None
+        if self._reasoning == "none":
+            return {"enabled": False}
+        return {"effort": self._reasoning}
 
     async def _whole(
         self, kwargs: dict[str, Any], entry: telemetry.CallRecord
@@ -241,8 +267,7 @@ class OpenAICompatibleClient:
         entry.ttft_s = time.monotonic() - started
         usage = getattr(resp, "usage", None)
         if usage is not None:
-            entry.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-            entry.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+            _usage_into(usage, entry)
         extra = getattr(resp, "model_extra", None) or {}
         if extra.get("provider"):
             entry.served_by = str(extra["provider"])

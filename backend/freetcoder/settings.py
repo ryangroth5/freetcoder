@@ -29,6 +29,7 @@ SETTABLE: frozenset[str] = frozenset({
     "llm_first_token_s",
     "llm_idle_s",
     "llm_fallback_model",
+    "llm_reasoning_effort",
     "generation_attempts",
     "repair_rounds",
     "tool_call_budget",
@@ -78,6 +79,10 @@ class Settings(BaseSettings):
     #: A second model on the same endpoint, tried once when the first stalls,
     #: times out or keeps failing. Empty disables it.
     llm_fallback_model: str = ""
+    #: How hard the model thinks before answering. "default" sends nothing and
+    #: leaves it to the model. Honoured unevenly: kimi-k2.5 goes from ~600
+    #: reasoning tokens to none; mimo-v2.5 produced *more* when told "none".
+    llm_reasoning_effort: Literal["default", "none", "low", "medium", "high"] = "default"
 
     #: Empty path means in-memory: the container has no persistent filesystem
     #: unless the user opts into a volume.

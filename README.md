@@ -101,6 +101,7 @@ when raised:
 | `FREETCODER_LLM_FIRST_TOKEN_S` | `30` | Generation streams; no token by then and the call is abandoned instead of waited on |
 | `FREETCODER_LLM_IDLE_S` | `60` | Silence allowed between tokens once a reply has started |
 | `FREETCODER_LLM_FALLBACK_MODEL` | *(empty)* | A second model on the same endpoint, tried once when the first stalls or fails |
+| `FREETCODER_LLM_REASONING_EFFORT` | `default` | `none`, `low`, `medium`, `high`, or `default` to send nothing. Models honour it unevenly |
 | `FREETCODER_LLM_MAX_RETRIES` | `3` | |
 
 The HTTP API documents itself: **`/docs`** serves Swagger UI and

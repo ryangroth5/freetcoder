@@ -26,7 +26,7 @@ from ..llm.client import OpenAICompatibleClient
 from ..models import Difficulty, GateOutcome, Language
 from ..settings import get_settings
 from .gate import validate_question
-from .module import generate_module
+from .module import generate_module, generate_question_as_module
 from .pipeline import generate_question
 from .quality import Scorecard, score_question
 from .scenarios import pick as pick_scenario
@@ -72,28 +72,31 @@ def variant_prompt(variant: str) -> tuple[str, list[str]]:
     return ("\n\n" + "\n\n".join(parts) if parts else ""), exemplars
 
 
-def _client(model: str | None) -> LLMClient:
+def _client(model: str | None, reasoning: str = "default") -> LLMClient:
     settings = get_settings()
-    if not model:
+    if not model and reasoning == "default":
         return build_client(settings)
     return OpenAICompatibleClient(
-        base_url=settings.llm_base_url, api_key=settings.llm_api_key, model=model,
+        base_url=settings.llm_base_url, api_key=settings.llm_api_key,
+        model=model or settings.llm_model,
         timeout_s=settings.llm_timeout_s, max_retries=settings.llm_max_retries,
         first_token_s=settings.llm_first_token_s, idle_s=settings.llm_idle_s,
+        reasoning_effort=reasoning,
     )
 
 
 async def run_variant(
     variant: str, count: int, *, attempts: int, repairs: int, sufficiency: bool,
     strategy: str = "monolithic", model: str | None = None, seed: bool = False,
+    reasoning: str = "default",
 ) -> Scorecard:
     settings = get_settings()
-    client = _client(model)
+    client = _client(model, reasoning)
     extra, exemplars = variant_prompt(variant)
     label = f"{strategy[:4]}/{variant}"
     card = Scorecard(
         variant=f"{model or settings.llm_model}|{strategy}"
-        f"{'+seed' if seed else ''}|{variant}"
+        f"{'+seed' if seed else ''}|think:{reasoning}|{variant}"
     )
     titles: list[str] = []
 
@@ -107,7 +110,24 @@ async def run_variant(
         card.attempted += 1
         translated: list[StageOutcome] = []
         with telemetry.collecting() as calls:
-            if strategy in {"staged", "flat", "delimited", "module"}:
+            if strategy == "product":
+                # Exactly what the app runs: generation, the critics, the gate,
+                # revision rounds -- so time and outcome are end to end.
+                result = await generate_question_as_module(
+                    client, config, difficulty=Difficulty.MEDIUM,
+                    max_attempts=max(1, attempts), repair_rounds=repairs,
+                    check_sufficiency=sufficiency,
+                )
+                question = result.question.question if result.question else None
+                outcome = (
+                    GateOutcome.ACCEPTED if result.question else GateOutcome.SCHEMA_INVALID
+                )
+                failures = (
+                    [f"{a.outcome.value}: {a.detail[:110]}" for a in result.attempts]
+                    if not result.question else []
+                )
+                repairs_used = max(0, len(result.attempts) - 1)
+            elif strategy in {"staged", "flat", "delimited", "module"}:
                 build = {
                     "staged": generate_staged,
                     "flat": generate_flat,
@@ -171,10 +191,12 @@ async def run_variant(
                 failures = [a.outcome.value for a in result.attempts] if not result.question else []
                 repairs_used = max(0, len(result.attempts) - 1)
         elapsed = time.monotonic() - started
+        card.spent_seconds += elapsed
 
         if question is None or outcome is not GateOutcome.ACCEPTED:
             card.failures.extend(failures or [outcome.value])
-            print(f"  {label} {i + 1}/{count}  {elapsed:5.1f}s  REJECTED  {failures}")
+            print(f"  {label} {i + 1}/{count}  {elapsed:5.1f}s  REJECTED  "
+              f"think={calls.reasoning_tokens}  {failures}")
             continue
 
         q = question
@@ -186,6 +208,7 @@ async def run_variant(
         report.seconds = round(elapsed, 1)
         report.provider_seconds = round(calls.seconds, 1)
         report.completion_tokens = calls.completion_tokens
+        report.reasoning_tokens = calls.reasoning_tokens
         report.translations_attempted = len(translated)
         report.translations_ok = sum(1 for st in translated if st.ok)
         card.reports.append(report)
@@ -200,6 +223,7 @@ async def run_variant(
         print(
             f"  {label} {i + 1}/{count}  {elapsed:5.1f}s  "
             f"llm={report.provider_seconds:5.1f}s  tok={report.completion_tokens:>5}  "
+            f"think={report.reasoning_tokens:>5}  "
             f"{q.title[:38]:<38} {' '.join(flags)}"
         )
     return card
@@ -229,7 +253,9 @@ async def main() -> int:
     parser.add_argument("--sufficiency", action="store_true",
                         help="also run the second-model check (doubles the time)")
     parser.add_argument("--strategies", default="monolithic",
-                        help="comma-separated: monolithic,flat,delimited,staged,module")
+                        help="comma-separated: monolithic,flat,delimited,staged,module,product")
+    parser.add_argument("--reasoning", default="default",
+                        help="comma-separated efforts: default,none,low,medium,high")
     parser.add_argument("--models", default="",
                         help="comma-separated model slugs; blank uses the configured one")
     parser.add_argument("--seed-scenario", action="store_true",
@@ -248,17 +274,22 @@ async def main() -> int:
     strategies = [s.strip() for s in args.strategies.split(",") if s.strip()]
     models = [m.strip() for m in args.models.split(",") if m.strip()] or [None]
 
+    efforts = [e.strip() for e in args.reasoning.split(",") if e.strip()]
+
     cards = []
     for model in models:
         for strategy in strategies:
-            for variant in chosen:
-                print(f"--- {model or settings.llm_model} | {strategy} | "
-                      f"variant {variant}: {VARIANTS[variant] or ['baseline']}")
-                cards.append(await run_variant(
-                    variant, args.count, attempts=args.attempts,
-                    repairs=args.repairs, sufficiency=args.sufficiency,
-                    strategy=strategy, model=model, seed=args.seed_scenario,
-                ))
+            for effort in efforts:
+                for variant in chosen:
+                    print(f"--- {model or settings.llm_model} | {strategy} | "
+                          f"thinking {effort} | variant {variant}: "
+                          f"{VARIANTS[variant] or ['baseline']}", flush=True)
+                    cards.append(await run_variant(
+                        variant, args.count, attempts=args.attempts,
+                        repairs=args.repairs, sufficiency=args.sufficiency,
+                        strategy=strategy, model=model, seed=args.seed_scenario,
+                        reasoning=effort,
+                    ))
 
     print_table(cards)
     args.out.write_text(json.dumps(

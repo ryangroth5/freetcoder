@@ -428,3 +428,64 @@ class TestTheFallbackModel:
         with pytest.raises(LLMStalled) as caught:
             await client.complete_text(system="s", user="u")
         assert "backup" in str(caught.value), "the second failure is the one reported"
+
+
+class TestReasoningEffort:
+    """How hard the model thinks is a request field, and honoured unevenly:
+    probed live, kimi-k2.5 went from ~600 reasoning tokens to none while
+    mimo-v2.5 produced *more* when told "none". So "default" must send nothing
+    at all, and what was asked for is recorded beside what came back."""
+
+    def _client(self, effort: str):
+        from freetcoder.llm.client import OpenAICompatibleClient
+
+        return OpenAICompatibleClient(
+            base_url="http://unused", api_key="k", model="m", timeout_s=5,
+            max_retries=1, first_token_s=2, idle_s=2, reasoning_effort=effort,
+        )
+
+    async def _sent(self, effort: str) -> dict:
+        client = self._client(effort)
+        sent: list[dict] = []
+
+        async def create(**kwargs):
+            sent.append(kwargs)
+            return _Stream([(0.0, _chunk("ok"))])
+
+        client._client.chat.completions.create = create  # type: ignore[method-assign]
+        await client.complete_text(system="s", user="u")
+        return sent[0]
+
+    async def test_default_sends_nothing(self) -> None:
+        assert "extra_body" not in await self._sent("default")
+
+    async def test_none_disables_it(self) -> None:
+        assert (await self._sent("none"))["extra_body"] == {"reasoning": {"enabled": False}}
+
+    async def test_a_level_is_sent_as_effort(self) -> None:
+        assert (await self._sent("low"))["extra_body"] == {"reasoning": {"effort": "low"}}
+
+    async def test_reasoning_is_counted_apart_from_the_answer(self) -> None:
+        from types import SimpleNamespace
+
+        from freetcoder.llm import telemetry
+
+        client = self._client("high")
+        usage = SimpleNamespace(
+            prompt_tokens=10, completion_tokens=40,
+            completion_tokens_details={"reasoning_tokens": 35},
+        )
+
+        async def create(**kwargs):
+            return _Stream([
+                (0.0, _chunk(reasoning="think")), (0.0, _chunk(reasoning="more")),
+                (0.0, _chunk("answer")), (0.0, _chunk(usage=usage)),
+            ])
+
+        client._client.chat.completions.create = create  # type: ignore[method-assign]
+        with telemetry.collecting() as calls:
+            assert await client.complete_text(system="s", user="u") == "answer"
+        rec = calls.calls[0]
+        assert rec.reasoning_streamed == 2 and rec.tokens_streamed == 3
+        assert rec.reasoning_tokens == 35 and rec.reasoning_effort == "high"
+        assert calls.reasoning_tokens == 35

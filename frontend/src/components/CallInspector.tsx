@@ -49,6 +49,11 @@ const OUTCOME_TONE: Record<ProgressCall['outcome'], string> = {
 function CallRow({ call }: { call: ProgressCall }) {
   const [expanded, setExpanded] = useState(false)
   const route = call.served_by ? `${call.model} → ${call.served_by}` : call.model
+  // The provider's exact count once it reports usage; the live chunk count
+  // until then, so a call that is only thinking visibly is.
+  const reasoning = call.reasoning_tokens || call.reasoning_streamed
+  const effort = call.reasoning_effort && call.reasoning_effort !== 'default'
+    ? ` [thinking: ${call.reasoning_effort}]` : ''
   // A running call with no first token is the stall this panel exists to show.
   const ttft = call.ttft_s === null
     ? (call.in_flight ? `waiting ${call.seconds.toFixed(0)}s` : '—')
@@ -63,9 +68,10 @@ function CallRow({ call }: { call: ProgressCall }) {
       >
         <span className={OUTCOME_TONE[call.outcome]}>{call.outcome}</span>
         <span>{call.stage}</span>
-        <span className="text-[var(--color-muted)]">{route}</span>
+        <span className="text-[var(--color-muted)]">{route}{effort}</span>
         <span className="ml-auto tabular-nums text-[var(--color-muted)]">
-          ttft {ttft} · {call.tokens_streamed} tok · {call.tokens_per_s} tok/s ·
+          ttft {ttft} · {call.tokens_streamed} tok
+          {reasoning > 0 && ` (${reasoning} thinking)`} · {call.tokens_per_s} tok/s ·
           gap {call.longest_gap_s.toFixed(1)}s · {call.seconds.toFixed(1)}s
         </span>
       </button>

@@ -40,6 +40,12 @@ class CallRecord:
     ttft_s: float | None = None
     #: Deltas received so far -- a rough token count, live while streaming.
     tokens_streamed: int = 0
+    #: Of those, how many were reasoning rather than answer, live.
+    reasoning_streamed: int = 0
+    #: The provider's exact reasoning token count, once it reports usage.
+    reasoning_tokens: int = 0
+    #: What was asked for: "default" when nothing was sent.
+    reasoning_effort: str = "default"
     #: The longest silence between two deltas.
     longest_gap_s: float = 0.0
     #: ok | stalled | timeout | error | fell_back, or "running".
@@ -66,6 +72,9 @@ class CallRecord:
             "seconds": round(age, 2),
             "ttft_s": None if self.ttft_s is None else round(self.ttft_s, 2),
             "tokens_streamed": self.tokens_streamed,
+            "reasoning_streamed": self.reasoning_streamed,
+            "reasoning_tokens": self.reasoning_tokens,
+            "reasoning_effort": self.reasoning_effort,
             "tokens_per_s": round(rate, 1),
             "longest_gap_s": round(self.longest_gap_s, 2),
             "outcome": self.outcome,
@@ -98,6 +107,10 @@ class Collector:
     @property
     def completion_tokens(self) -> int:
         return sum(c.completion_tokens for c in self.calls)
+
+    @property
+    def reasoning_tokens(self) -> int:
+        return sum(c.reasoning_tokens for c in self.calls)
 
     @property
     def prompt_tokens(self) -> int:

@@ -117,6 +117,8 @@ class QualityReport:
     #: A plain counter rather than a bench dimension -- translating one function
     #: is a conformance check, not a strategy, so it has a success rate and not
     #: a quality score.
+    #: Of `completion_tokens`, how many the provider says were thinking.
+    reasoning_tokens: int = 0
     translations_attempted: int = 0
     translations_ok: int = 0
 
@@ -251,6 +253,10 @@ class Scorecard:
     attempted: int = 0
     reports: list[QualityReport] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+    #: Wall clock for every question asked, accepted or not. Rejections cost
+    #: time too, so "seconds per accepted question" divides this by accepted
+    #: rather than averaging only the questions that made it.
+    spent_seconds: float = 0.0
 
     def _rate(self, attr: str) -> float:
         if not self.reports:
@@ -289,4 +295,10 @@ class Scorecard:
             "median_tokens": (
                 sorted(r.completion_tokens for r in self.reports)[n // 2] if n else 0
             ),
+            "median_thinking": (
+                sorted(r.reasoning_tokens for r in self.reports)[n // 2] if n else 0
+            ),
+            # The number that decides it: a fast setting that needs three tries
+            # is slower than a slow one that passes.
+            "s_per_accepted": round(self.spent_seconds / n, 1) if n else 0.0,
         }

@@ -7,6 +7,7 @@ function call(overrides: Partial<ProgressCall> = {}): ProgressCall {
   return {
     stage: 'module', model: 'deepseek/deepseek-v4.1-flash', served_by: 'DeepSeek',
     mode: 'text', seconds: 12.5, ttft_s: 0.9, tokens_streamed: 420,
+    reasoning_streamed: 300, reasoning_tokens: 310, reasoning_effort: 'default',
     tokens_per_s: 36.2, longest_gap_s: 1.1, outcome: 'ok', error: '',
     in_flight: false, prompt: 'THE PROMPT', reply: 'THE REPLY',
     prompt_tokens: 900, completion_tokens: 410, ...overrides,
@@ -52,5 +53,12 @@ describe('CallInspector', () => {
       tokens_streamed: 0, reply: '',
     })]} />)
     expect(screen.getByText(/ttft waiting 27s/)).toBeInTheDocument()
+  })
+
+  it('says how much of a call was thinking', () => {
+    localStorage.setItem('freetcoder.inspectorOpen', '1')
+    render(<CallInspector calls={[call({ reasoning_effort: 'low' })]} />)
+    expect(screen.getByText(/310 thinking/)).toBeInTheDocument()
+    expect(screen.getByText(/\[thinking: low\]/)).toBeInTheDocument()
   })
 })

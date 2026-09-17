@@ -81,6 +81,7 @@ class SettingsPatch(BaseModel):
     llm_idle_s: float | None = Field(default=None, gt=0, le=600)
     # Empty is meaningful: it switches the fallback off.
     llm_fallback_model: str | None = Field(default=None, max_length=200)
+    llm_reasoning_effort: Literal["default", "none", "low", "medium", "high"] | None = None
     generation_strategy: Literal["module", "monolithic"] | None = None
     generation_attempts: int | None = Field(default=None, ge=1, le=10)
     repair_rounds: int | None = Field(default=None, ge=0, le=10)

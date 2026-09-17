@@ -246,6 +246,9 @@ export interface ProgressCall {
   /** Null until the first token: a stalled call is a TTFT that stays null. */
   ttft_s: number | null
   tokens_streamed: number
+  reasoning_streamed: number
+  reasoning_tokens: number
+  reasoning_effort: string
   tokens_per_s: number
   longest_gap_s: number
   outcome: 'running' | 'ok' | 'stalled' | 'timeout' | 'error' | 'fell_back'
