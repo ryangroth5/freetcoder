@@ -810,7 +810,7 @@ Generation calls now stream, with three clocks instead of one:
 |---|---|---|
 | `llm_first_token_s` | 30s | no content or reasoning token has arrived |
 | `llm_idle_s` | 60s | tokens were flowing and then stopped |
-| `llm_timeout_s` | 300s | the whole call, however lively |
+| `llm_timeout_s` | 600s | the whole call, however lively |
 
 Reasoning tokens count as alive — thinking models emit them long before any
 content. Gateway keep-alive comments do not: they prove the connection, not

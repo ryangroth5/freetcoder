@@ -97,7 +97,7 @@ when raised:
 | `FREETCODER_TOOL_CALL_BUDGET` | `6` | Code executions the model may make while repairing. `monolithic` only — the module strategy's critics already run the code |
 | `FREETCODER_TUTOR_TOOL_BUDGET` | `4` | Reference probes the tutor may make per reply |
 | `FREETCODER_TUTOR_MESSAGE_CAP` | `60` | Tutor messages per session |
-| `FREETCODER_LLM_TIMEOUT_S` | `300` | Per request, not per question. A slow model writing a whole module can take minutes |
+| `FREETCODER_LLM_TIMEOUT_S` | `600` | Per request, not per question. Stuck calls are caught earlier by the two stall limits below; this only ends calls still producing tokens |
 | `FREETCODER_LLM_FIRST_TOKEN_S` | `30` | Generation streams; no token by then and the call is abandoned instead of waited on |
 | `FREETCODER_LLM_IDLE_S` | `60` | Silence allowed between tokens once a reply has started |
 | `FREETCODER_LLM_FALLBACK_MODEL` | *(empty)* | A second model on the same endpoint, tried once when the first stalls or fails |
@@ -134,6 +134,21 @@ Three questions per model is thin evidence and worth treating as such, but
 `deepseek-v4.1-flash` is the one to reach for on a budget: it was the only one
 that took no revision rounds, and the fastest. `deepseek/deepseek-chat` is not
 a coding model and fails this pipeline; do not confuse the two.
+
+**Thinking.** `FREETCODER_LLM_REASONING_EFFORT` controls how long the model
+reasons before answering. Measured end to end, including revision rounds:
+
+| model | thinking | accepted | first try | seconds per accepted question |
+|---|---|---|---|---|
+| `deepseek-v4.1-flash` | **default** | 3/3 | 3/3 | **107** |
+| `deepseek-v4.1-flash` | none | 3/3 | 2/3 | 148 |
+| `moonshotai/kimi-k2.5` | **none** | 3/3 | 1/3 | **373** |
+| `moonshotai/kimi-k2.5` | default | 3/3 | 2/3 | 784 |
+
+Leave it at `default` for flash. For a model that thinks heavily by default,
+such as kimi, `none` roughly halves the wait; expect more revision rounds, which
+the gate makes safe. `low` helped neither model. See
+[findings](docs/findings.md#6-thinking-less-is-a-trade-not-a-free-speedup).
 
 **Local models.** Point the base URL at `http://host.docker.internal:11434/v1`
 for Ollama and use any non-empty key. Smaller models often fail the solvability

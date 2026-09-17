@@ -54,13 +54,13 @@ class Settings(BaseSettings):
     #: nothing lands in plaintext on a mounted volume.
     llm_api_key: str = ""
     llm_model: str = "anthropic/claude-sonnet-4.5"
-    #: Per *request*, not per question. Measured, a module call that works
-    #: takes about 100s, so this is roughly a 3x ceiling rather than a guess;
-    #: OpenRouter's own per-endpoint `latency_last_30m` and
-    #: `throughput_last_30m` give a per-model figure if a tighter one is
-    #: wanted. A call that overruns is no longer re-sent by the client, only
-    #: by the loop in `generate_module`, which reports what it is doing.
-    llm_timeout_s: float = 300.0
+    #: Per *request*, not per question, and deliberately generous. Generation
+    #: streams, so a genuinely stuck call is caught by `llm_first_token_s` and
+    #: `llm_idle_s` within a minute; this limit only ends calls that are
+    #: steadily producing tokens. At 300s it ended exactly those: kimi-k2.5 at
+    #: `low` thinking lost a question to two calls that were still working,
+    #: 1,414s spent for nothing. 600 is the most the settings API allows.
+    llm_timeout_s: float = 600.0
     #: Retries for a provider that was momentarily unable -- a 429, a 5xx, a
     #: reply with no choices in it. **Not** for a timeout: re-sending a request
     #: that just spent a full deadline is the least promising use of the next

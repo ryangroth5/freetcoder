@@ -90,7 +90,7 @@ runs every other language's reference against the Python oracle's answers.
 
 **It is never repairable.** The model may rewrite anything the question is made
 of; it may not touch the validator. See
-[findings.md](findings.md#6-what-holds-the-whole-thing-together).
+[findings.md](findings.md#7-what-holds-the-whole-thing-together).
 
 ## Running untrusted code
 

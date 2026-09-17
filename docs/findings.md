@@ -182,7 +182,54 @@ bench recorded that a question scored badly and kept no copy of its text, so the
 question "is it really thin, or is the metric wrong?" could not be answered by
 reading it. It records the statement now.
 
-## 6. What holds the whole thing together
+## 6. Thinking less is a trade, not a free speedup
+
+A live generation streamed 11,462 chunks for a module of roughly 2,000 tokens:
+most of a two-minute call was the model reasoning. So we made reasoning effort
+a setting and measured it the way that matters — seconds per *accepted*
+question, counting the time spent on rejections and revision rounds, through
+the same path the app runs.
+
+First, a cheap probe of whether models honour the setting at all. They don't,
+uniformly: kimi-k2.5 went from ~600 reasoning tokens to zero (and got a simple
+arithmetic question wrong without them); deepseek-v4.1-flash stopped reasoning
+privately and did it out loud in its answer instead; mimo-v2.5 reasoned *more*
+when told "none". **A reasoning setting is a request, not a guarantee.**
+
+Then three questions per setting:
+
+| model | thinking | accepted | first try | typical | seconds per accepted |
+|---|---|---|---|---|---|
+| deepseek-v4.1-flash | default | 3/3 | 3/3 | 77s | **107** |
+| deepseek-v4.1-flash | low | 3/3 | 3/3 | 97s | 132 |
+| deepseek-v4.1-flash | none | 3/3 | 2/3 | 42s | 148 |
+| moonshotai/kimi-k2.5 | none | 3/3 | 1/3 | 312s | **373** |
+| moonshotai/kimi-k2.5 | default | 3/3 | 2/3 | 719s | 784 |
+| moonshotai/kimi-k2.5 | low | 2/3 | 2/2 | 688s | 1,200 |
+
+What it says:
+
+- **Model choice dwarfs the setting.** flash at its default is 3.5x faster than
+  kimi at its best.
+- **Turning thinking off pays in proportion to how much a model thinks by
+  default.** kimi thinks heavily and halved its time. flash thinks briefly: its
+  typical question got faster, but one needed a revision round and took 372s,
+  so the average got worse.
+- **It lowers first-try success on both** (3/3 → 2/3, 2/3 → 1/3), yet not one
+  of the six questions failed outright. The revision loop recovered every one.
+  The gate is what makes "none" safe to try at all.
+- **`low` was never the answer.** flash ignored it; kimi at `low` was the
+  slowest and produced the only rejection.
+- **That rejection was a limit, not a model.** Two kimi calls were still
+  producing tokens when the 300-second overall limit ended them. Since streamed
+  calls are already caught within a minute if they are genuinely stuck, the
+  overall limit now defaults to 600s.
+
+Three questions per cell is thin, and single outliers — 372s, 1,440s — move
+these averages a long way. The direction is clear enough to act on; the exact
+ratios are not.
+
+## 7. What holds the whole thing together
 
 One rule, and it is the reason any of the above is checkable:
 
