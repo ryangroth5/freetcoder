@@ -21,7 +21,7 @@ from openai import APIError, AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
 from . import telemetry
-from .base import LLMError, LLMStalled, LLMTimeout
+from .base import LLMAccountError, LLMError, LLMStalled, LLMTimeout
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +40,15 @@ def _extract_json(text: str) -> str:
     if start != -1 and end > start:
         return text[start : end + 1]
     return text
+
+
+def _account_message(status: int, exc: Exception) -> str:
+    what = {
+        401: "the API key was rejected",
+        402: "the account is out of credits",
+        403: "the account is not allowed to use this model",
+    }[status]
+    return f"{what} (HTTP {status}): {str(exc)[:200]}"
 
 
 def _usage_into(usage: Any, entry: telemetry.CallRecord) -> None:
@@ -187,6 +196,9 @@ class OpenAICompatibleClient:
         except TimeoutError as exc:
             raise stalled() from exc
         except APIError as exc:
+            status = getattr(exc, "status_code", None)
+            if status in (401, 402, 403):
+                raise LLMAccountError(_account_message(status, exc)) from exc
             # Endpoints that cannot stream reject the parameter outright. Only
             # then fall back to one whole reply -- a 429 or a 5xx is not a
             # reason to send the request a second time.
@@ -289,6 +301,8 @@ class OpenAICompatibleClient:
         """
         try:
             return await call(self._model)
+        except LLMAccountError:
+            raise  # a different model on the same empty account fails the same way
         except LLMError as exc:
             if not self._fallback or self._fallback == self._model:
                 raise
@@ -352,7 +366,7 @@ class OpenAICompatibleClient:
                     "LLM output failed validation (attempt %d): %s",
                     attempt + 1, fields or "unknown field",
                 )
-            except LLMTimeout:
+            except (LLMTimeout, LLMAccountError):
                 # Same reasoning as complete_text: an identical request that
                 # just burned a whole deadline will burn the next one too.
                 raise
@@ -403,10 +417,10 @@ class OpenAICompatibleClient:
                     if not content.strip():
                         raise LLMError("empty response from provider")
                 return content
-            except LLMTimeout:
-                # Not retried here. The caller's own loop can vary the prompt;
-                # this one can only re-send the identical request that already
-                # went quiet.
+            except (LLMTimeout, LLMAccountError):
+                # Not retried here. A timeout: the caller's loop can vary the
+                # prompt, this one can only re-send it. An account refusal:
+                # nothing on this side of the account changes it.
                 raise
             except (APIError, LLMError) as exc:
                 last = exc

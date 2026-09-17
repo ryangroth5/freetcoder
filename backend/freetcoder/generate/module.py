@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..formats import FormatConfig
-from ..llm import LLMClient, LLMError, telemetry
+from ..llm import LLMAccountError, LLMClient, LLMError, telemetry
 from ..models import (
     Clarification,
     Difficulty,
@@ -358,6 +358,10 @@ async def generate_module(
                 reply = await client.complete_text(
                     system=_read_prompt("stage_module"), user=ask, temperature=0.7
                 )
+        except LLMAccountError as exc:
+            # No retry on this side of the account can help.
+            report_to(str(exc)[:160], kind="fail")
+            raise
         except LLMError as exc:
             last = str(exc)[:200]
             report_to(f"the model did not answer: {last[:80]}", kind="warn")

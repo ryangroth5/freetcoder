@@ -7,11 +7,12 @@ from collections.abc import Callable
 from typing import Literal
 
 from ..settings import Settings, get_settings
-from .base import LLMClient, LLMError, LLMStalled, LLMTimeout
+from .base import LLMAccountError, LLMClient, LLMError, LLMStalled, LLMTimeout
 from .client import OpenAICompatibleClient
 from .fake import FakeLLM, ToolCall
 
 __all__ = [
+    "LLMAccountError",
     "FakeLLM",
     "LLMClient",
     "LLMError",

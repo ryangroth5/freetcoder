@@ -36,6 +36,16 @@ class LLMStalled(LLMTimeout):
     busy one looked identical for the full 300s.
     """
 
+
+class LLMAccountError(LLMError):
+    """The provider refused the account: no credits, a bad key, no access.
+
+    Nothing a retry or a different model on the same account can fix, so it
+    is neither retried nor failed over. It used to be both, and surfaced as
+    "schema_invalid: no text response" -- a bench of eighteen questions reported
+    eighteen model failures when the account was simply empty.
+    """
+
 class LLMClient(Protocol):
     """Anything that can turn a prompt into a validated pydantic model."""
 

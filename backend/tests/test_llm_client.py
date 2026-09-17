@@ -489,3 +489,40 @@ class TestReasoningEffort:
         assert rec.reasoning_streamed == 2 and rec.tokens_streamed == 3
         assert rec.reasoning_tokens == 35 and rec.reasoning_effort == "high"
         assert calls.reasoning_tokens == 35
+
+
+class TestAnAccountRefusalIsNotAModelFailure:
+    """A bench of eighteen questions reported eighteen `schema_invalid: no text
+    response` failures. The account was out of credits. A 402 was retried,
+    could trigger the fallback model, and never said what it was."""
+
+    def _client(self, **kw):
+        from freetcoder.llm.client import OpenAICompatibleClient
+
+        opts = {"timeout_s": 5, "max_retries": 3, "first_token_s": 2, "idle_s": 2,
+                "fallback_model": "backup"}
+        opts.update(kw)
+        return OpenAICompatibleClient(base_url="http://unused", api_key="k", model="m", **opts)
+
+    async def test_out_of_credits_is_sent_once_and_named(self) -> None:
+        import httpx
+        from openai import APIStatusError
+
+        from freetcoder.llm import LLMAccountError
+
+        client = self._client()
+        models: list[str] = []
+
+        async def create(**kwargs):
+            models.append(kwargs["model"])
+            request = httpx.Request("POST", "http://unused")
+            raise APIStatusError(
+                "This request requires more credits",
+                response=httpx.Response(402, request=request), body=None,
+            )
+
+        client._client.chat.completions.create = create  # type: ignore[method-assign]
+        with pytest.raises(LLMAccountError) as caught:
+            await client.complete_text(system="s", user="u")
+        assert models == ["m"], "not retried, and no fallback on the same account"
+        assert "out of credits" in str(caught.value)

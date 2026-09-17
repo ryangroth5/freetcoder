@@ -23,7 +23,7 @@ from .formats import (
     unsupported_topics,
 )
 from .library import QuestionLibrary, build_library
-from .llm import FakeLLM, llm_status, telemetry
+from .llm import FakeLLM, LLMAccountError, llm_status, telemetry
 from .models import Difficulty, GatedQuestion, Language, TestCase
 from .progress import GenerationCancelled, Reporter, Run, registry
 from .scoring import QuestionScore, score_session
@@ -428,6 +428,14 @@ async def create_session(request: Request, payload: CreateSessionRequest) -> dic
                 payload.progress_id, "cancelled", provider_seconds=calls.seconds
             )
             raise HTTPException(409, "Generation cancelled.") from None
+        except LLMAccountError as exc:
+            # Say what is actually wrong. This used to come back as "the model
+            # could not produce a question", which sends people debugging
+            # prompts when the fix is on the provider's billing page.
+            registry.finish(
+                payload.progress_id, "failed", provider_seconds=calls.seconds
+            )
+            raise HTTPException(402, str(exc)) from None
 
         if obtained is None:
             reporter(_spent(reporter, calls.seconds), kind="warn")
